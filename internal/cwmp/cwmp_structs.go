@@ -11,8 +11,6 @@ type CwmpHeader struct {
 
 type CwmpMessage struct {
 	Name string
-	// ID     string
-	// Header CwmpHeader
 	CwmpHeader
 }
 

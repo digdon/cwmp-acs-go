@@ -2,45 +2,33 @@ package cwmp_1_4
 
 import (
 	"cwmp-acs/internal/cwmp"
+	"cwmp-acs/internal/xml"
 	"fmt"
 	"strconv"
 )
 
-func GenerateInformResponse(message cwmp.CwmpMessageInterface) (string, error) {
+func GenerateInformResponse(message cwmp.CwmpMessageInterface, namespaces map[xml.NamespaceID]xml.Namespace) (string, error) {
 	informResponse, ok := message.(*cwmp.InformResponse)
 	if !ok {
 		return "", fmt.Errorf("invalid message type")
 	}
-
-	cwmpNamespace := "urn:dslforum-org:cwmp-" + namespaceVersionSuffix(informResponse.CwmpHeader.UseCWMPVersion)
 
 	responseXML := `<soap_env:Envelope
 	xmlns:soap_env="http://schemas.xmlsoap.org/soap/envelope/"
 	xmlns:soap_enc="http://schemas.xmlsoap.org/soap/encoding/"
 	xmlns:xsd="http://www.w3.org/2001/XMLSchema"
 	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-	xmlns:cwmp="` + cwmpNamespace + `">
+	xmlns:` + namespaces[xml.CWMP].Prefix + `="` + namespaces[xml.CWMP].URL + `">
 	<soap_env:Header>
-		<cwmp:ID soap_env:mustUnderstand="1">` + informResponse.GetID() + `</cwmp:ID>
+		<` + namespaces[xml.CWMP].Prefix + `:ID soap_env:mustUnderstand="1">` + informResponse.GetID() + `</` + namespaces[xml.CWMP].Prefix + `:ID>
+		<` + namespaces[xml.CWMP].Prefix + `:UseCWMPVersion soap_env:mustUnderstand="1">` + informResponse.CwmpHeader.UseCWMPVersion + `</` + namespaces[xml.CWMP].Prefix + `:UseCWMPVersion>
 	</soap_env:Header>
 	<soap_env:Body>
-		<cwmp:InformResponse>
-			<MaxEnvelopes>` + strconv.Itoa(informResponse.MaxEnvelopes) + `</MaxEnvelopes>
-		</cwmp:InformResponse>
+		<` + namespaces[xml.CWMP].Prefix + `:InformResponse>
+			<` + namespaces[xml.CWMP].Prefix + `:MaxEnvelopes>` + strconv.Itoa(informResponse.MaxEnvelopes) + `</` + namespaces[xml.CWMP].Prefix + `:MaxEnvelopes>
+		</` + namespaces[xml.CWMP].Prefix + `:InformResponse>
 	</soap_env:Body>
 </soap_env:Envelope>`
 
 	return responseXML, nil
-}
-
-func namespaceVersionSuffix(version string) string {
-	if version == "" || version == "unknown" {
-		return "1-2"
-	}
-
-	if len(version) == 3 && version[1] == '.' {
-		return string(version[0]) + "-" + string(version[2])
-	}
-
-	return "1-2"
 }

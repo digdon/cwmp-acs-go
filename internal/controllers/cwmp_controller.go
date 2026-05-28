@@ -157,6 +157,7 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 
 				newSessionInfo := session.CreateNewSession()
 				newSessionInfo.CwmpVersion = sessionInfo.CwmpVersion
+				newSessionInfo.XmlNamespaces = sessionInfo.XmlNamespaces
 				fmt.Printf("New session info: %+v\n", newSessionInfo)
 				sessionID = newSessionInfo.SessionID
 				sessionInfo = newSessionInfo
@@ -220,8 +221,11 @@ func parseIncomingMessage(xmlBytes []byte, sessionInfo *session.SessionInfo) (cw
 		fmt.Printf("  %s => %s\n", prefix, uri)
 	}
 
-	_, cwmpNS := findCwmpNamespace(parsedEnv.Namespaces)
-	cpeHeader := xml.ParseCPEHeader(parsedEnv.Header, cwmpNS)
+	namespaceMap := xml.BuildNamespaceMap(parsedEnv.Namespaces)
+	sessionInfo.XmlNamespaces = namespaceMap
+
+	// _, cwmpNS := findCwmpNamespace(parsedEnv.Namespaces)
+	cpeHeader := xml.ParseCPEHeader(parsedEnv.Header, namespaceMap[xml.CWMP].URL)
 
 	fmt.Println("\nParsed CPE header:", cpeHeader)
 
@@ -350,13 +354,13 @@ func generateXmlMessageViaMap(sessionInfo *session.SessionInfo, message cwmp.Cwm
 	// First try to find a generator specific to the specified version and message name
 	if versionGenerators, ok := cwmpMessageGenerators[sessionInfo.CwmpVersion]; ok {
 		if generator, ok := versionGenerators[message.GetName()]; ok {
-			return generator(message)
+			return generator(message, sessionInfo.XmlNamespaces)
 		}
 	}
 
 	// No version-specific generator, so now try to find a generator in the default set
 	if generator, ok := defaultCwmpMessageGenerators[message.GetName()]; ok {
-		return generator(message)
+		return generator(message, sessionInfo.XmlNamespaces)
 	}
 
 	return "", fmt.Errorf("no generator found for message: %s", message.GetName())

@@ -10,23 +10,6 @@ import (
 	"cwmp-acs/internal/cwmp"
 )
 
-const SOAPENV_NS_PREFIX string = "soap-env"
-const SOAPENV_NS_URL string = "http://schemas.xmlsoap.org/soap/envelope/"
-
-const SOAPENC_NS_PREFIX string = "soap-enc"
-const SOAPENC_NS_URL string = "http://schemas.xmlsoap.org/soap/encoding/"
-
-const XSI_NS_PREFIX string = "xsi"
-const XSI_NS_URL string = "http://www.w3.org/2001/XMLSchema-instance"
-
-const XSD_NS_PREFIX string = "xsd"
-const XSD_NS_URL string = "http://www.w3.org/2001/XMLSchema"
-
-const CWMP_NS_PREFIX string = "cwmp"
-const CWMP_1_0_NS_URL string = "urn:dslforum-org:cwmp-1-0"
-const CWMP_1_1_NS_URL string = "urn:dslforum-org:cwmp-1-1"
-const CWMP_1_2_NS_URL string = "urn:dslforum-org:cwmp-1-2"
-
 func ParseSOAPEnvelope(xmlBody []byte) (*ParsedEnvelope, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(xmlBody))
 
@@ -183,4 +166,16 @@ func ParseCPEHeader(headerElem SOAPElement, cwmpNS string) cwmp.CwmpHeader {
 	}
 
 	return header
+}
+
+func BuildNamespaceMap(namespaces map[string]string) map[NamespaceID]Namespace {
+	result := make(map[NamespaceID]Namespace)
+
+	for prefix, url := range namespaces {
+		if id, ok := namespaceUrlToIDMap[url]; ok {
+			result[id] = Namespace{Prefix: prefix, URL: url}
+		}
+	}
+
+	return result
 }
