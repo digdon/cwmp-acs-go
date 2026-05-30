@@ -9,5 +9,6 @@ var CwmpMessageParsers = map[string]xml.MessageParser{
 }
 
 var CwmpMessageGenerators = map[string]xml.MessageGenerator{
+	"Fault":          GenerateFault,
 	"InformResponse": GenerateInformResponse,
 }

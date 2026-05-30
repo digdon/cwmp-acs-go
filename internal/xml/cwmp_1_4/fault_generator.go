@@ -8,8 +8,8 @@ import (
 	"strconv"
 )
 
-func GenerateInformResponse(message cwmp.CwmpMessageInterface, namespaces map[xml.NamespaceID]xml.Namespace) (string, error) {
-	informResponse, ok := message.(*cwmp.InformResponse)
+func GenerateFault(message cwmp.CwmpMessageInterface, namespaces map[xml.NamespaceID]xml.Namespace) (string, error) {
+	fault, ok := message.(*cwmp.Fault)
 	if !ok {
 		return "", fmt.Errorf("invalid message type")
 	}
@@ -31,19 +31,18 @@ func GenerateInformResponse(message cwmp.CwmpMessageInterface, namespaces map[xm
 	header.AddChild(
 		dom.NewElement(cwmpNS.Prefix+":ID").
 			AddAttr(soapenv.Prefix+":mustUnderstand", "1").
-			SetText(informResponse.GetID()),
+			SetText(fault.GetID()),
 	)
-	if v := informResponse.CwmpHeader.UseCWMPVersion; v != "" {
-		header.AddChild(
-			dom.NewElement(cwmpNS.Prefix+":UseCWMPVersion").
-				AddAttr(soapenv.Prefix+":mustUnderstand", "1").
-				SetText(v),
-		)
-	}
 
 	body := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Body"))
-	ir := body.AddChild(dom.NewElement(cwmpNS.Prefix + ":InformResponse"))
-	ir.AddChild(dom.NewElement("MaxEnvelopes").SetText(strconv.Itoa(informResponse.MaxEnvelopes)))
+	faultEl := body.AddChild(dom.NewElement(soapenv.Prefix + ":Fault"))
+	faultEl.AddChild(dom.NewElement("faultcode").SetText(fault.Source.String()))
+	faultEl.AddChild(dom.NewElement("faultstring").SetText("CWMP fault"))
+
+	detail := faultEl.AddChild(dom.NewElement("detail"))
+	cwmpFault := detail.AddChild(dom.NewElement(cwmpNS.Prefix + ":Fault"))
+	cwmpFault.AddChild(dom.NewElement("FaultCode").SetText(strconv.Itoa(fault.FaultCode)))
+	cwmpFault.AddChild(dom.NewElement("FaultString").SetText(fault.FaultString))
 
 	return dom.NewDocument(envelope).Serialize()
 }
