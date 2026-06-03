@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"time"
 
 	"cwmp-acs/internal/cwmp"
@@ -38,7 +37,7 @@ var incomingRequestNames = map[string]bool{
 }
 
 func CwmpHandler(w http.ResponseWriter, r *http.Request) {
-	// Check to see if incoming request is part of an existing session
+	// Gather up any existing session info, based on session ID cookie
 	var sessionID string
 	var sessionInfo *session.SessionInfo
 
@@ -83,9 +82,9 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if sessionInfo.SessionState != session.AWAITING_CPE_EMPTY_POST {
+		if sessionInfo.SessionState != session.RECEIVING_CPE_RPCS {
 			// Shouldn't be getting an empty post at this stage in a session - better abandon the session
-			fmt.Println(sessionID, ": got an empty post when we shouldn't - terminating session")
+			fmt.Printf("[%s] got an empty post when we shouldn't - terminating session\n", sessionID)
 			sessionInfo.SessionState = session.TERMINATED
 			delete(session.SessionIdActiveSessions, sessionID)
 			delete(session.DeviceInfoActiveSessions, sessionInfo.DeviceID)
@@ -95,7 +94,7 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 
 		// This means the CPE is done sending it's RPCs, so now the ACS can send some
 		sessionInfo.SessionState = session.SENDING_ACS_RPCS
-		sessionInfo.LastMessageTime = time.Now().Unix()
+		sessionInfo.LastIncomingMessageTime = time.Now().Unix()
 
 		outgoingMsg = findOutgoingRpc(sessionInfo)
 	} else {
@@ -106,26 +105,23 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 			if sessionID != "" {
 				// No session info, but we got a session ID cookie - this is probably an expired session ID,
 				// so we'll just log it and move on to creating a new session
-				fmt.Println(sessionID + ": this is perhaps an expired session ID")
+				fmt.Printf("[%s] this is perhaps an expired session ID\n", sessionID)
 			}
 
 			sessionInfo = session.CreateNewSession()
-			sessionID = sessionInfo.SessionID
+			// sessionID = sessionInfo.SessionID
 		}
 
-		// Try parsing the incoming message
-		incomingMsg, parseErr := parseIncomingMessage(xmlBytes, sessionInfo)
-		if parseErr != nil {
-			if xmlErr, ok := stderrors.AsType[*errors.XmlParsingError](parseErr); ok {
+		outgoingMsg, err = handleIncomingMessage(xmlBytes, sessionInfo)
+		if err != nil {
+			if xmlErr, ok := stderrors.AsType[*errors.XmlParsingError](err); ok {
 				// XML parsing error - just return a 400 with the error message
 				errMsg := fmt.Sprintf("XML parsing error: %s", xmlErr.Message)
 				fmt.Println(errMsg)
 				http.Error(w, errMsg, http.StatusBadRequest)
 				// w.WriteHeader(http.StatusBadRequest)
 				return
-			}
-
-			if incomingMsgErr, ok := stderrors.AsType[*errors.IncomingMessageError](parseErr); ok {
+			} else if incomingMsgErr, ok := stderrors.AsType[*errors.IncomingMessageError](err); ok {
 				// CWMP message parsing error - we need to return a SOAP fault
 				fault := cwmp.Fault{
 					CwmpMessage: cwmp.CwmpMessage{
@@ -138,51 +134,13 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				sendOutgoingMsg(w, sessionInfo, &fault)
 				return
+			} else {
+				// Some other kind of error - we'll just return a 500 with the error message
+				errMsg := fmt.Sprintf("Internal server error: %v", err)
+				fmt.Println(errMsg)
+				http.Error(w, errMsg, http.StatusInternalServerError)
+				return
 			}
-		}
-
-		fmt.Println("Parsed incoming message:", incomingMsg)
-
-		if incomingMsg.GetName() == "Inform" {
-			// Inform gets initial special processing since it's kicking off a new session
-
-			if sessionInfo.SessionState != session.NEW {
-				// Picked up session ID/session info from a previous session
-				// This shouldn't happen, but in case it does, we'll log it and then create a whole new session
-				fmt.Printf("[%s] got an Inform message for a session that was already active (state: %+v) - this is unexpected, so terminating old session and starting new one\n", sessionID, sessionInfo.SessionState)
-
-				sessionInfo.SessionState = session.TERMINATED
-				delete(session.SessionIdActiveSessions, sessionID)
-				delete(session.DeviceInfoActiveSessions, sessionInfo.DeviceID)
-
-				newSessionInfo := session.CreateNewSession()
-				newSessionInfo.CwmpVersion = sessionInfo.CwmpVersion
-				newSessionInfo.XmlNamespaces = sessionInfo.XmlNamespaces
-				fmt.Printf("New session info: %+v\n", newSessionInfo)
-				sessionID = newSessionInfo.SessionID
-				sessionInfo = newSessionInfo
-			}
-
-			sessionInfo.SessionState = session.INITIATING
-			sessionInfo.DeviceID = incomingMsg.(*cwmp.Inform).DeviceId
-			sessionInfo.LastMessageTime = time.Now().Unix()
-
-			// Add session info to active session tables
-			session.SessionIdActiveSessions[sessionID] = sessionInfo
-			session.DeviceInfoActiveSessions[sessionInfo.DeviceID] = sessionInfo
-		}
-
-		sessionInfo.LastMessageTime = time.Now().Unix()
-
-		if _, ok := incomingRequestNames[incomingMsg.GetName()]; ok {
-			// This is a request from the CPE that requires a response from the ACS
-			outgoingMsg = processIncomingRequest(sessionInfo, incomingMsg)
-		} else {
-			// This is a response from the CPE to a previous ACS request
-			processIncomingResponse(sessionInfo, incomingMsg)
-
-			// Look for the next ACS RPC to send back to the CPE (if any)
-			outgoingMsg = findOutgoingRpc(sessionInfo)
 		}
 	}
 
@@ -191,7 +149,7 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 
 		if outgoingMsg.GetName() == "InformResponse" {
 			// After sending the InformResponse, we're waiting for an empty post from the CPE to indicate it's done sending its RPCs
-			sessionInfo.SessionState = session.AWAITING_CPE_EMPTY_POST
+			sessionInfo.SessionState = session.RECEIVING_CPE_RPCS
 		}
 	} else {
 		// No outgoing RPCs, so we're done. Let's terminate the session
@@ -203,64 +161,127 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func parseIncomingMessage(xmlBytes []byte, sessionInfo *session.SessionInfo) (cwmp.CwmpMessageInterface, error) {
+func handleIncomingMessage(xmlBytes []byte, sessionInfo *session.SessionInfo) (cwmp.CwmpMessageInterface, error) {
+	sessionID := sessionInfo.SessionID
+
+	// Parse the envelope and extract namespaces, header, body, etc.
 	parsedEnv, err := xml.ParseSOAPEnvelope(xmlBytes)
 	if err != nil {
-		return nil, &errors.XmlParsingError{Message: fmt.Sprintf("Failed to parse SOAP envelope: %v", err)}
-	}
-
-	fmt.Printf("\nEnvelope: %s (%s)\n", parsedEnv.Envelope.Name.Local, parsedEnv.Envelope.Name.Space)
-	fmt.Printf("Header:   %s (%s)\n", parsedEnv.Header.Name.Local, parsedEnv.Header.Name.Space)
-	fmt.Printf("Body:     %s (%s)\n", parsedEnv.Body.Name.Local, parsedEnv.Body.Name.Space)
-	fmt.Println("\nNamespaces:")
-	for prefix, uri := range parsedEnv.Namespaces {
-		if prefix == "" {
-			fmt.Printf("  (default) => %s\n", uri)
-			continue
-		}
-		fmt.Printf("  %s => %s\n", prefix, uri)
+		return nil, &errors.XmlParsingError{Message: fmt.Sprintf("Failed to parse incoming message: %v", err)}
 	}
 
 	namespaceMap := xml.BuildNamespaceMap(parsedEnv.Namespaces)
-	sessionInfo.XmlNamespaces = namespaceMap
 
-	// _, cwmpNS := findCwmpNamespace(parsedEnv.Namespaces)
+	// Parse out the Header contents
 	cpeHeader := xml.ParseCPEHeader(parsedEnv.Header, namespaceMap[xml.CWMP].URL)
 
-	fmt.Println("\nParsed CPE header:", cpeHeader)
-
+	// Extract the RPC name from the Body
 	rpcName := parsedEnv.Body.Children[0].Name.Local
-	fmt.Println("RPC Name:", rpcName)
 
-	cwmpVersion := determineCwmpVersion(parsedEnv.Namespaces, cpeHeader)
-	fmt.Println(cwmpVersion)
-
-	if rpcName == "Inform" {
-		sessionInfo.CwmpVersion = cwmpVersion
-	} else if cwmpVersion != sessionInfo.CwmpVersion {
-		// Cwmp version of incoming message doesn't match what's already been established in the session info,
-		// so let's return a fault
+	// Check to see if the incoming Header content is valid
+	if valid, faultCode, faultString := isHeaderValidForMessageType(cpeHeader, rpcName); !valid {
 		return nil, &errors.IncomingMessageError{
 			Header:      cpeHeader,
 			Source:      cwmp.FaultSourceCPE,
-			FaultCode:   8801, // Version mismatch
-			FaultString: fmt.Sprintf("CWMP version mismatch - expected %s but got %s", sessionInfo.CwmpVersion.String(), cwmpVersion.String()),
+			FaultCode:   faultCode,
+			FaultString: faultString,
 		}
 	}
 
-	return parseCwmpMessageViaMap(sessionInfo, rpcName, parsedEnv.Body.Children[0], cpeHeader)
+	cwmpVersion := sessionInfo.CwmpVersion
+
+	if rpcName == "Inform" {
+		// Possibly an Inform message, so let's work out which version of CWMP to use
+		cwmpVersion = determineCwmpVersion(parsedEnv.Namespaces, cpeHeader)
+	}
+
+	// Try parsing the CWMP message from the SOAP body
+	parsedMsg, err := parseCwmpMessageViaMap(cwmpVersion, rpcName, parsedEnv.Body.Children[0], cpeHeader)
+	if err != nil {
+		return nil, err
+	}
+
+	sessionInfo.LastIncomingMessageTime = time.Now().Unix()
+
+	if parsedMsg.GetName() == "Inform" {
+		// Inform gets initial special processing since it's kicking off a new session
+
+		if sessionInfo.SessionState != session.NEW {
+			// Picked up session ID/session info from a previous session
+			// This shouldn't happen, but in case it does, we'll log it and then reset the session
+			fmt.Printf("[%s] got an Inform message for a session that was already active (state: %+v) - this is unexpected, so resetting it\n", sessionID, sessionInfo.SessionState)
+
+			// sessionInfo.SessionState = session.TERMINATED
+			delete(session.SessionIdActiveSessions, sessionID)
+			delete(session.DeviceInfoActiveSessions, sessionInfo.DeviceID)
+
+			// To save on memory, we're just going to re-use the old session
+			// This is also because I haven't worked out an elegant way to return it if we create a new one here
+			sessionInfo.SessionState = session.NEW
+			sessionInfo.DeviceID = cwmp.DeviceId{}
+			sessionInfo.LastIncomingMessageTime = 0
+			sessionInfo.LastOutgoingMessageTime = 0
+			sessionInfo.CwmpVersion = cwmp.UNKNOWN_CWMP_VERSION
+			sessionInfo.XmlNamespaces = nil
+			sessionInfo.SessionID = ""
+
+			newSessionInfo := session.CreateNewSession()
+			sessionID = newSessionInfo.SessionID // copy the new session ID to our existing session info struct
+		}
+
+		fmt.Printf("[%s] Starting a new CWMP session\n", sessionID)
+		sessionInfo.SessionState = session.INITIATING
+		sessionInfo.DeviceID = parsedMsg.(*cwmp.Inform).DeviceId
+		sessionInfo.LastIncomingMessageTime = time.Now().Unix()
+		sessionInfo.CwmpVersion = cwmpVersion
+		sessionInfo.XmlNamespaces = namespaceMap
+
+		// Add session info to active session tables
+		session.SessionIdActiveSessions[sessionID] = sessionInfo
+		session.DeviceInfoActiveSessions[sessionInfo.DeviceID] = sessionInfo
+	} else if sessionInfo.SessionState != session.RECEIVING_CPE_RPCS && sessionInfo.SessionState != session.SENDING_ACS_RPCS {
+		fmt.Printf("[%s] got an unexpected message (name: %s) in session state %+v\n", sessionID, parsedMsg.GetName(), sessionInfo.SessionState)
+		return nil, &errors.IncomingMessageError{
+			Header:      cpeHeader,
+			Source:      cwmp.FaultSourceCPE,
+			FaultCode:   8001, // Invalid session state
+			FaultString: "Invalid session state",
+		}
+	}
+
+	var outgoingMsg cwmp.CwmpMessageInterface
+
+	if _, ok := incomingRequestNames[parsedMsg.GetName()]; ok {
+		// This is a request from the CPE that requires a response from the ACS
+		outgoingMsg = processIncomingRequest(sessionInfo, parsedMsg)
+	} else {
+		// This is a response from the CPE to a previous ACS request
+		processIncomingResponse(sessionInfo, parsedMsg)
+
+		// Look for the next ACS RPC to send back to the CPE (if any)
+		outgoingMsg = findOutgoingRpc(sessionInfo)
+	}
+
+	return outgoingMsg, nil
 }
 
-var cwmpNSPattern = regexp.MustCompile(`^urn:dslforum-org:cwmp-\d+-\d+$`)
+func isHeaderValidForMessageType(header cwmp.CwmpHeader, messageType string) (bool, int, string) {
+	// Start with items in the header that can never be sent by the CPE for any message type
+	if header.UseCWMPVersion != "" {
+		return false, 8003, "UseCWMPVersion cannot be sent by CPE"
+	} else if header.HoldRequests != "" {
+		return false, 8003, "HoldRequests cannot be sent by CPE"
+	}
 
-func findCwmpNamespace(namespaces map[string]string) (string, string) {
-	for prefix, uri := range namespaces {
-		if cwmpNSPattern.MatchString(uri) {
-			return prefix, uri
+	if messageType != "Inform" {
+		if header.SupportedCWMPVersions != "" {
+			return false, 8003, "SupportedCWMPVersions cannot be sent by CPE for non-Inform messages"
+		} else if header.SessionTimeout != "" {
+			return false, 8003, "SessionTimeout cannot be sent by CPE for non-Inform messages"
 		}
 	}
 
-	return "", ""
+	return true, 0, ""
 }
 
 func determineCwmpVersion(namespaces map[string]string, header cwmp.CwmpHeader) cwmp.SupportedCwmpVersion {
@@ -293,9 +314,9 @@ func determineCwmpVersion(namespaces map[string]string, header cwmp.CwmpHeader) 
 	return cwmpVersion
 }
 
-func parseCwmpMessageViaMap(sessionInfo *session.SessionInfo, rpcName string, elem xml.SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
+func parseCwmpMessageViaMap(cwmpVersion cwmp.SupportedCwmpVersion, rpcName string, elem xml.SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
 	// First try to find a parser specific to the specified version and message name
-	if versionParsers, ok := cwmpMessageParsers[sessionInfo.CwmpVersion]; ok {
+	if versionParsers, ok := cwmpMessageParsers[cwmpVersion]; ok {
 		if parser, ok := versionParsers[rpcName]; ok {
 			return parser(elem, cpeHeader)
 		}
@@ -390,4 +411,6 @@ func sendOutgoingMsg(w http.ResponseWriter, sessionInfo *session.SessionInfo, me
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(xmlString))
+
+	sessionInfo.LastOutgoingMessageTime = time.Now().Unix()
 }
