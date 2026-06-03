@@ -193,6 +193,7 @@ func handleIncomingMessage(xmlBytes []byte, sessionInfo *session.SessionInfo) (c
 	if rpcName == "Inform" {
 		// Possibly an Inform message, so let's work out which version of CWMP to use
 		cwmpVersion = determineCwmpVersion(parsedEnv.Namespaces, cpeHeader)
+		sessionInfo.XmlNamespaces = namespaceMap
 	}
 
 	// Try parsing the CWMP message from the SOAP body
