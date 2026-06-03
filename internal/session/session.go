@@ -14,18 +14,19 @@ type SessionState int
 const (
 	NEW SessionState = iota
 	INITIATING
-	AWAITING_CPE_EMPTY_POST
+	RECEIVING_CPE_RPCS
 	SENDING_ACS_RPCS
 	TERMINATED
 )
 
 type SessionInfo struct {
-	SessionID       string
-	DeviceID        cwmp.DeviceId
-	SessionState    SessionState
-	CwmpVersion     cwmp.SupportedCwmpVersion
-	LastMessageTime int64
-	XmlNamespaces   map[xml.NamespaceID]xml.Namespace
+	SessionID               string
+	DeviceID                cwmp.DeviceId
+	SessionState            SessionState
+	CwmpVersion             cwmp.SupportedCwmpVersion
+	LastIncomingMessageTime int64
+	LastOutgoingMessageTime int64
+	XmlNamespaces           map[xml.NamespaceID]xml.Namespace
 }
 
 var SessionIdActiveSessions = map[string]*SessionInfo{}
@@ -35,12 +36,13 @@ func CreateNewSession() *SessionInfo {
 	sessionID := uuid.NewString()
 
 	sessionInfo := &SessionInfo{
-		SessionID:       sessionID,
-		DeviceID:        cwmp.DeviceId{},
-		SessionState:    NEW,
-		CwmpVersion:     cwmp.UNKNOWN_CWMP_VERSION,
-		LastMessageTime: 0,
-		XmlNamespaces:   map[xml.NamespaceID]xml.Namespace{},
+		SessionID:               sessionID,
+		DeviceID:                cwmp.DeviceId{},
+		SessionState:            NEW,
+		CwmpVersion:             cwmp.UNKNOWN_CWMP_VERSION,
+		LastIncomingMessageTime: 0,
+		LastOutgoingMessageTime: 0,
+		XmlNamespaces:           map[xml.NamespaceID]xml.Namespace{},
 	}
 
 	return sessionInfo

@@ -75,11 +75,12 @@ func ParseInform(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageI
 		}
 	}
 
-	if !isValid(inform) {
+	valid, validationError := isValid(inform)
+	if !valid {
 		return nil, &errors.IncomingMessageError{
 			Source:      cwmp.FaultSourceCPE,
 			FaultCode:   8003, // Invalid arguments
-			FaultString: "Inform message is not valid",
+			FaultString: validationError,
 		}
 	}
 
@@ -294,9 +295,17 @@ func parseParameterList(elem SOAPElement) ([]cwmp.ParameterValueStruct, *errors.
 	return paramList, nil
 }
 
-func isValid(inform cwmp.Inform) bool {
+func isValid(inform cwmp.Inform) (bool, string) {
+	if inform.DeviceId.Manufacturer == "" {
+		return false, "Inform is missing DeviceId"
+	}
+
+	if len(inform.Events) == 0 {
+		return false, "Inform is missing Events"
+	}
+
 	if len(inform.ParamList) == 0 {
-		return false
+		return false, "Inform is missing ParameterList"
 	}
 
 	hasCrUrl := false
@@ -307,5 +316,9 @@ func isValid(inform cwmp.Inform) bool {
 		}
 	}
 
-	return hasCrUrl
+	if !hasCrUrl {
+		return false, "Inform is missing ConnectionRequestURL"
+	}
+
+	return true, ""
 }
