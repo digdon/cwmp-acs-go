@@ -32,7 +32,7 @@ var defaultCwmpMessageGenerators = cwmp14.CwmpMessageGenerators
 
 var incomingRequestNames = map[string]bool{
 	"Inform":           true,
-	"GetPRCMethods":    true,
+	"GetRPCMethods":    true,
 	"TransferComplete": true,
 }
 
@@ -184,7 +184,12 @@ func handleIncomingMessage(xmlBytes []byte, sessionID string) (cwmp.CwmpMessageI
 	if sessionID != "" {
 		// Look in active session info table
 		sessionInfo = session.SessionIdActiveSessions[sessionID]
-		fmt.Printf("[%s] Found session info: %+v\n", sessionID, sessionInfo)
+
+		if sessionInfo == nil {
+			fmt.Printf("[%s] No session info found for session ID\n", sessionID)
+		} else {
+			fmt.Printf("[%s] Found session info: %+v\n", sessionID, sessionInfo)
+		}
 	}
 
 	var parsedMsg cwmp.CwmpMessageInterface
@@ -230,8 +235,15 @@ func handleIncomingMessage(xmlBytes []byte, sessionID string) (cwmp.CwmpMessageI
 		// Everything else
 		if sessionID == "" || sessionInfo == nil {
 			// No session ID or session info, so we don't know what to do with this message - we'll just return an error
-			fmt.Printf("[%s] got a %s message, but there's no valid session ID cookie\n", sessionID, rpcName)
-			return nil, nil, &errors.IncomingMessageError{
+			// We need to create a temporary session info here so that we can include the correct headers in the SOAP fault response,
+			// but we won't actually register this session info because it's invalid
+			sessionInfo = &session.SessionInfo{
+				SessionID:     sessionID,
+				CwmpVersion:   determineCwmpVersion(cpeHeader, namespaceMap[xml.CWMP].URL),
+				XmlNamespaces: namespaceMap,
+			}
+			fmt.Printf("[%s] got a %s message, but there's no valid session\n", sessionID, rpcName)
+			return nil, sessionInfo, &errors.IncomingMessageError{
 				Header:      cpeHeader,
 				Source:      cwmp.FaultSourceCPE,
 				FaultCode:   8001, // Invalid session state
@@ -342,6 +354,8 @@ func determineCwmpVersion(cpeHeader cwmp.CwmpHeader, cwmpNSUrl string) cwmp.Supp
 }
 
 func processIncomingRequest(sessionInfo *session.SessionInfo, incomingMsg cwmp.CwmpMessageInterface) cwmp.CwmpMessageInterface {
+	fmt.Printf("Processing incoming request: %+v\n", incomingMsg)
+
 	switch incomingMsg.GetName() {
 	case "Inform":
 		informResponse := &cwmp.InformResponse{
@@ -355,6 +369,23 @@ func processIncomingRequest(sessionInfo *session.SessionInfo, incomingMsg cwmp.C
 			MaxEnvelopes: 1,
 		}
 		return informResponse
+
+	case "GetRPCMethods":
+		methodList := make([]string, 0, len(incomingRequestNames))
+		for methodName := range incomingRequestNames {
+			methodList = append(methodList, methodName)
+		}
+		getRPCMethodsResponse := &cwmp.GetRPCMethodsResponse{
+			CwmpMessage: cwmp.CwmpMessage{
+				Name: "GetRPCMethodsResponse",
+				CwmpHeader: cwmp.CwmpHeader{
+					ID: incomingMsg.GetID(),
+				},
+			},
+			MethodList: methodList,
+		}
+		return getRPCMethodsResponse
+
 	default:
 		// For now, we'll just return a generic response for any unsupported RPCs, but in the future we might want to return a fault or something more specific
 		fmt.Printf("Received unsupported RPC method: %s\n", incomingMsg.GetName())

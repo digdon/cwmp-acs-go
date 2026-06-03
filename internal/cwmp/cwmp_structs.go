@@ -45,6 +45,8 @@ func (f FaultSource) String() string {
 	}
 }
 
+// Message substructures
+
 type DeviceId struct {
 	Manufacturer string
 	OUI          string
@@ -63,6 +65,23 @@ type ParameterValueStruct struct {
 	Type  string
 }
 
+// Full message structures
+
+type Fault struct {
+	CwmpMessage
+	Source      FaultSource
+	FaultCode   int
+	FaultString string
+}
+
+type GetRPCMethods struct {
+	CwmpMessage
+}
+
+type GetRPCMethodsResponse struct {
+	CwmpMessage
+	MethodList []string
+}
 type Inform struct {
 	CwmpMessage
 	DeviceId     DeviceId
@@ -76,11 +95,4 @@ type Inform struct {
 type InformResponse struct {
 	CwmpMessage
 	MaxEnvelopes int
-}
-
-type Fault struct {
-	CwmpMessage
-	Source      FaultSource
-	FaultCode   int
-	FaultString string
 }

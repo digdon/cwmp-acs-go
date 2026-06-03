@@ -5,10 +5,12 @@ import (
 )
 
 var CwmpMessageParsers = map[string]xml.MessageParser{
-	"Inform": ParseInform,
+	"GetRPCMethods": ParseGetRPCMethods,
+	"Inform":        ParseInform,
 }
 
 var CwmpMessageGenerators = map[string]xml.MessageGenerator{
-	"Fault":          GenerateFault,
-	"InformResponse": GenerateInformResponse,
+	"Fault":                 GenerateFault,
+	"GetRPCMethodsResponse": GenerateGetRPCMethodsResponse,
+	"InformResponse":        GenerateInformResponse,
 }
