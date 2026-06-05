@@ -11,12 +11,23 @@ import (
 )
 
 var CwmpMessageParsers = map[string]xml.MessageParser{
-	"Fault":                     ParseFault,
+	// "AddObjectResponse":              ParseAddObjectResponse,
+	// "DeleteObjectResponse":           ParseDeleteObjectResponse,
+	// "DownloadResponse":               ParseDownloadResponse,
+	"Fault": ParseFault,
+	// "GetParameterAttributesResponse": ParseGetParameterAttributesResponse,
 	"GetParameterNamesResponse": ParseGetParameterNamesResponse,
-	"GetRPCMethods":             ParseGetRPCMethods,
-	"GetRPCMethodsResponse":     ParseGetRPCMethodsResponse,
-	"Inform":                    ParseInform,
+	// "GetParameterValuesResponse":     ParseGetParameterValuesResponse,
+	"GetRPCMethods":                  ParseGetRPCMethods,
+	"GetRPCMethodsResponse":          ParseGetRPCMethodsResponse,
+	"Inform":                         ParseInform,
+	"RebootResponse":                 ParseRebootResponse,
+	"SetParameterAttributesResponse": ParseSetParameterAttributesResponse,
+	// "SetParameterValuesResponse": ParseSetParameterValuesResponse,
+	// "TransferComplete":           ParseTransferComplete,
 }
+
+type SOAPElement = xml.SOAPElement
 
 func ParseFault(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
 	fmt.Println("Parsing Fault")
@@ -188,14 +199,89 @@ func ParseGetRPCMethods(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpM
 }
 
 func ParseGetRPCMethodsResponse(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
-
 	getRPCMethodsResponse := cwmp.GetRPCMethodsResponse{
 		CwmpMessage: cwmp.CwmpMessage{
 			Name: "GetRPCMethodsResponse", CwmpHeader: cpeHeader,
 		},
 	}
 
+	for _, child := range elem.Children {
+		switch child.Name.Local {
+		case "MethodList":
+			methods, err := parseMethodList(child)
+			if err != nil {
+				return nil, err
+			}
+			getRPCMethodsResponse.MethodList = methods
+		}
+	}
+
 	return &getRPCMethodsResponse, nil
+}
+
+var methodListRegex = regexp.MustCompile(`^[^:]+:string\[(\d+)\]$`)
+
+func parseMethodList(elem SOAPElement) ([]string, *errors.IncomingMessageError) {
+	methodList := []string{}
+
+	// Start by looking for the arrayType attribute to confirm this is an array of string
+	var arrayType string
+	for _, attr := range elem.Attrs {
+		if attr.Name.Local == "arrayType" {
+			arrayType = attr.Value
+			break
+		}
+	}
+
+	if arrayType == "" {
+		return nil, &errors.IncomingMessageError{
+			Source:      cwmp.FaultSourceCPE,
+			FaultCode:   8003, // Invalid arguments
+			FaultString: "MethodList is missing arrayType attribute",
+		}
+	}
+
+	// Now verify the arrayType is correct for an array of string
+	matches := methodListRegex.FindStringSubmatch(arrayType)
+	if len(matches) != 2 {
+		return nil, &errors.IncomingMessageError{
+			Source:      cwmp.FaultSourceCPE,
+			FaultCode:   8003, // Invalid arguments
+			FaultString: fmt.Sprintf("invalid arrayType for MethodList: %s", arrayType),
+		}
+	}
+
+	// Capture the item count from the arrayType for later verification
+	itemCount, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return nil, &errors.IncomingMessageError{
+			Source:      cwmp.FaultSourceCPE,
+			FaultCode:   8003, // Invalid arguments
+			FaultString: fmt.Sprintf("invalid item count in arrayType: %v", err),
+		}
+	}
+
+	// Now parse each method name in the list
+	for _, methodChild := range elem.Children {
+		if methodChild.Name.Local != "string" {
+			return nil, &errors.IncomingMessageError{
+				Source:      cwmp.FaultSourceCPE,
+				FaultCode:   8003, // Invalid arguments
+				FaultString: fmt.Sprintf("unexpected element in MethodList: %s", methodChild.Name.Local),
+			}
+		}
+		methodList = append(methodList, methodChild.Text)
+	}
+
+	if len(methodList) != itemCount {
+		return nil, &errors.IncomingMessageError{
+			Source:      cwmp.FaultSourceCPE,
+			FaultCode:   8003, // Invalid arguments
+			FaultString: fmt.Sprintf("MethodList item count mismatch: expected %d, got %d", itemCount, len(methodList)),
+		}
+	}
+
+	return methodList, nil
 }
 
 func ParseInform(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
@@ -314,6 +400,8 @@ func parseDeviceId(elem SOAPElement) (cwmp.DeviceId, *errors.IncomingMessageErro
 	return deviceID, nil
 }
 
+var eventStructRegex = regexp.MustCompile(`^[^:]+:EventStruct\[(\d+)\]$`)
+
 func parseEventList(elem SOAPElement) ([]cwmp.Event, *errors.IncomingMessageError) {
 	eventList := []cwmp.Event{}
 
@@ -391,6 +479,8 @@ func parseEventList(elem SOAPElement) ([]cwmp.Event, *errors.IncomingMessageErro
 
 	return eventList, nil
 }
+
+var parameterValueStructRegex = regexp.MustCompile(`^[^:]+:ParameterValueStruct\[(\d+)\]$`)
 
 func parseParameterList(elem SOAPElement) ([]cwmp.ParameterValueStruct, *errors.IncomingMessageError) {
 	paramList := []cwmp.ParameterValueStruct{}
@@ -514,4 +604,24 @@ var minimumForcedInformParameters = []string{
 	"DeviceInfo.ProvisioningCode",
 	"ManagementServer.ConnectionRequestURL",
 	"ManagementServer.ParameterKey",
+}
+
+func ParseRebootResponse(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
+	rebootResponse := cwmp.RebootResponse{
+		CwmpMessage: cwmp.CwmpMessage{
+			Name: "RebootResponse", CwmpHeader: cpeHeader,
+		},
+	}
+
+	return &rebootResponse, nil
+}
+
+func ParseSetParameterAttributesResponse(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
+	setParameterAttributesResponse := cwmp.SetParameterAttributesResponse{
+		CwmpMessage: cwmp.CwmpMessage{
+			Name: "SetParameterAttributesResponse", CwmpHeader: cpeHeader,
+		},
+	}
+
+	return &setParameterAttributesResponse, nil
 }
