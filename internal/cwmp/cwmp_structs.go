@@ -59,6 +59,12 @@ type Event struct {
 	CommandKey string
 }
 
+type ParameterAttributeStruct struct {
+	Name         string
+	Notification int
+	AccessList   []string
+}
+
 type ParameterInfoStruct struct {
 	Name     string
 	Writable bool
@@ -68,6 +74,14 @@ type ParameterValueStruct struct {
 	Name  string
 	Value string
 	Type  string
+}
+
+type SetParameterAttributeStruct struct {
+	Name               string
+	NotificationChange bool
+	Notification       int
+	AccessListChange   bool
+	AccessList         []string
 }
 
 // Full message structures
@@ -90,6 +104,16 @@ type GetParameterNamesResponse struct {
 	ParameterList []ParameterInfoStruct
 }
 
+type GetParameterValues struct {
+	CwmpMessage
+	ParameterNames []string
+}
+
+type GetParameterValuesResponse struct {
+	CwmpMessage
+	ParameterList []ParameterValueStruct
+}
+
 type GetRPCMethods struct {
 	CwmpMessage
 }
@@ -98,6 +122,7 @@ type GetRPCMethodsResponse struct {
 	CwmpMessage
 	MethodList []string
 }
+
 type Inform struct {
 	CwmpMessage
 	DeviceId     DeviceId
@@ -111,4 +136,38 @@ type Inform struct {
 type InformResponse struct {
 	CwmpMessage
 	MaxEnvelopes int
+}
+
+type Reboot struct {
+	CwmpMessage
+	CommandKey string
+}
+
+type RebootResponse struct {
+	CwmpMessage
+}
+
+type SetParameterAttributes struct {
+	CwmpMessage
+	ParameterList []SetParameterAttributeStruct
+}
+
+type SetParameterAttributesResponse struct {
+	CwmpMessage
+}
+
+type SetParameterValues struct {
+	CwmpMessage
+	ParameterList []ParameterValueStruct
+	ParameterKey  string
+}
+
+type SetParameterValuesResponse struct {
+	CwmpMessage
+	Status int
+}
+
+type TransferComplete struct {
+	CwmpMessage
+	CommandKey string
 }

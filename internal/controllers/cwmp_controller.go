@@ -356,6 +356,8 @@ func determineCwmpVersion(cpeHeader cwmp.CwmpHeader, cwmpNSUrl string) cwmp.Supp
 func processIncomingRequest(sessionInfo *session.SessionInfo, incomingMsg cwmp.CwmpMessageInterface) cwmp.CwmpMessageInterface {
 	fmt.Printf("Processing incoming request: %+v\n", incomingMsg)
 
+	// Probably want to change this to look up handlers in a map, similar to how we're doing parsing and generation,
+	// but for now we'll just use a switch statement
 	switch incomingMsg.GetName() {
 	case "Inform":
 		informResponse := &cwmp.InformResponse{
