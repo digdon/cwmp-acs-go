@@ -59,6 +59,11 @@ type Event struct {
 	CommandKey string
 }
 
+type ParameterInfoStruct struct {
+	Name     string
+	Writable bool
+}
+
 type ParameterValueStruct struct {
 	Name  string
 	Value string
@@ -72,6 +77,17 @@ type Fault struct {
 	Source      FaultSource
 	FaultCode   int
 	FaultString string
+}
+
+type GetParameterNames struct {
+	CwmpMessage
+	ParameterPath string
+	NextLevel     bool
+}
+
+type GetParameterNamesResponse struct {
+	CwmpMessage
+	ParameterList []ParameterInfoStruct
 }
 
 type GetRPCMethods struct {
