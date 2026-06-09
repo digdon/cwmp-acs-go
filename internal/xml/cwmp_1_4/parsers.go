@@ -578,14 +578,19 @@ func isValidInform(inform cwmp.Inform) (bool, string) {
 	}
 
 	if len(inform.Parameters) == 0 {
-		return false, "Inform is missing ParameterList"
+		return false, "Inform has no parameters, but should have at least some"
 	}
 
-	hasCrUrl := false
+	checkedParams := make(map[string]bool)
+	for _, suffix := range minimumForcedInformParameters {
+		checkedParams[suffix] = false
+	}
+
 	for _, param := range inform.Parameters {
-		if strings.HasSuffix(param.Name, "ConnectionRequestURL") {
-			hasCrUrl = true
-			break
+		for _, requiredParam := range minimumForcedInformParameters {
+			if strings.HasSuffix(param.Name, requiredParam) {
+				checkedParams[requiredParam] = true
+			}
 		}
 	}
 
