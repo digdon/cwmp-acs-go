@@ -71,7 +71,7 @@ func ParseInform(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageI
 			if err != nil {
 				return nil, err
 			}
-			inform.ParamList = paramList
+			inform.Parameters = paramList
 		}
 	}
 
@@ -304,12 +304,12 @@ func isValid(inform cwmp.Inform) (bool, string) {
 		return false, "Inform is missing Events"
 	}
 
-	if len(inform.ParamList) == 0 {
+	if len(inform.Parameters) == 0 {
 		return false, "Inform is missing ParameterList"
 	}
 
 	hasCrUrl := false
-	for _, param := range inform.ParamList {
+	for _, param := range inform.Parameters {
 		if strings.HasSuffix(param.Name, "ConnectionRequestURL") {
 			hasCrUrl = true
 			break

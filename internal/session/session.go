@@ -1,6 +1,8 @@
 package session
 
 import (
+	"context"
+
 	"github.com/google/uuid"
 
 	"cwmp-acs/internal/cwmp"
@@ -21,12 +23,14 @@ const (
 
 type SessionInfo struct {
 	SessionID               string
+	DeviceIdString          string
 	DeviceID                cwmp.DeviceId
 	SessionState            SessionState
 	CwmpVersion             cwmp.SupportedCwmpVersion
 	LastIncomingMessageTime int64
 	LastOutgoingMessageTime int64
 	XmlNamespaces           map[xml.NamespaceID]xml.Namespace
+	Context                 context.Context
 }
 
 var SessionIdActiveSessions = map[string]*SessionInfo{}

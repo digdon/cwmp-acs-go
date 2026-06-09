@@ -82,6 +82,7 @@ type GetRPCMethodsResponse struct {
 	CwmpMessage
 	MethodList []string
 }
+
 type Inform struct {
 	CwmpMessage
 	DeviceId     DeviceId
@@ -89,7 +90,7 @@ type Inform struct {
 	MaxEnvelopes int
 	CurrentTime  string
 	RetryCount   int
-	ParamList    []ParameterValueStruct
+	Parameters   []ParameterValueStruct
 }
 
 type InformResponse struct {
