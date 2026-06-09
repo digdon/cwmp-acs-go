@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"cwmp-acs/db"
 	"cwmp-acs/internal/controllers"
 	"log"
 	"net/http"
@@ -14,7 +15,13 @@ import (
 var serverPort = ":8080"
 
 func main() {
-	log.Printf("CWMP ACS starting on %s\n", serverPort)
+	log.Println("Starting up ACS")
+
+	// Initialize the database
+	db.InitDB(context.Background())
+
+	// Set up the http server
+	log.Printf("Initializing http server on port %s\n", serverPort)
 
 	srv := &http.Server{
 		Addr:    serverPort,
@@ -28,18 +35,25 @@ func main() {
 		}
 	}()
 
+	log.Println("Ready to go")
+
 	// Block until interrupt or terminate signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Shutting down server...")
+	log.Println("Shutting down ACS")
 
 	// Give active connections time to finish
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	log.Println("Shutting down http server and waiting for active connections to finish...")
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal("Server forced to shutdown:", err)
 	}
+
+	log.Println("Closing database connection...")
+	db.CloseDB()
+
 	log.Println("Server exited")
 }
 

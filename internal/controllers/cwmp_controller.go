@@ -1,12 +1,15 @@
 package controllers
 
 import (
+	"context"
 	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
+	"cwmp-acs/db"
 	"cwmp-acs/internal/cwmp"
 	"cwmp-acs/internal/errors"
 	"cwmp-acs/internal/session"
@@ -101,7 +104,7 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 
 		outgoingMsg = findOutgoingRpc(sessionInfo)
 	} else {
-		outgoingMsg, sessionInfo, err = handleIncomingMessage(xmlBytes, sessionID)
+		outgoingMsg, sessionInfo, err = handleIncomingMessage(xmlBytes, sessionID, r.Context())
 		if err != nil {
 			if xmlErr, ok := stderrors.AsType[*errors.XmlParsingError](err); ok {
 				// XML parsing error - just return a 400 with the error message
@@ -151,7 +154,7 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func handleIncomingMessage(xmlBytes []byte, sessionID string) (cwmp.CwmpMessageInterface, *session.SessionInfo, error) {
+func handleIncomingMessage(xmlBytes []byte, sessionID string, ctx context.Context) (cwmp.CwmpMessageInterface, *session.SessionInfo, error) {
 	parsedEnv, err := xml.ParseSOAPEnvelope(xmlBytes)
 	if err != nil {
 		return nil, nil, &errors.XmlParsingError{Message: fmt.Sprintf("Failed to parse SOAP message: %v", err)}
@@ -218,6 +221,7 @@ func handleIncomingMessage(xmlBytes []byte, sessionID string) (cwmp.CwmpMessageI
 
 		sessionInfo.CwmpVersion = cwmpVersion
 		sessionInfo.XmlNamespaces = namespaceMap
+		sessionInfo.Context = ctx
 
 		fmt.Printf("[%s] Determined CWMP version: %s\n", sessionID, cwmpVersion)
 
@@ -261,6 +265,8 @@ func handleIncomingMessage(xmlBytes []byte, sessionID string) (cwmp.CwmpMessageI
 				FaultString: "Invalid session state",
 			}
 		}
+
+		sessionInfo.Context = ctx
 
 		parsedMsg, err = parseCwmpMessageViaMap(sessionInfo.CwmpVersion, rpcName, parsedEnv.Body.Children[0], cpeHeader)
 		if err != nil {
@@ -358,17 +364,7 @@ func processIncomingRequest(sessionInfo *session.SessionInfo, incomingMsg cwmp.C
 
 	switch incomingMsg.GetName() {
 	case "Inform":
-		informResponse := &cwmp.InformResponse{
-			CwmpMessage: cwmp.CwmpMessage{
-				Name: "InformResponse",
-				CwmpHeader: cwmp.CwmpHeader{
-					ID:             incomingMsg.GetID(),
-					UseCWMPVersion: sessionInfo.CwmpVersion.String(),
-				},
-			},
-			MaxEnvelopes: 1,
-		}
-		return informResponse
+		return processInformRequest(sessionInfo, incomingMsg.(*cwmp.Inform))
 
 	case "GetRPCMethods":
 		methodList := make([]string, 0, len(incomingRequestNames))
@@ -468,4 +464,77 @@ func sendOutgoingMsg(w http.ResponseWriter, sessionInfo *session.SessionInfo, me
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(xmlString))
+}
+
+func processInformRequest(sessionInfo *session.SessionInfo, informMsg *cwmp.Inform) *cwmp.InformResponse {
+
+	// Generate the device ID string, which is comprised of the OUI, ProductClass and SerialNumber (if ProductClass is present), or just OUI and SerialNumber (if ProductClass is not present)
+	var deviceIdString string
+	if informMsg.DeviceId.ProductClass != "" {
+		deviceIdString = fmt.Sprintf("%s-%s-%s", informMsg.DeviceId.OUI, informMsg.DeviceId.ProductClass, informMsg.DeviceId.SerialNumber)
+	} else {
+		deviceIdString = fmt.Sprintf("%s-%s", informMsg.DeviceId.OUI, informMsg.DeviceId.SerialNumber)
+	}
+
+	sessionInfo.DeviceIdString = deviceIdString
+
+	// Look for special events
+	bootEvent := false
+	for _, event := range informMsg.Events {
+		if event.EventCode == "0 BOOTSTRAP" || event.EventCode == "0 BOOT" {
+			bootEvent = true
+			break
+		}
+	}
+
+	// Look for particular parameters
+	var crUrl, hwVersion, swVersion, provisioningCode, parameterKey string
+	for _, param := range informMsg.Parameters {
+		if strings.HasSuffix(param.Name, ".ManagementServer.ConnectionRequestURL") {
+			crUrl = param.Value
+		} else if strings.HasSuffix(param.Name, ".DeviceInfo.HardwareVersion") {
+			hwVersion = param.Value
+		} else if strings.HasSuffix(param.Name, ".DeviceInfo.SoftwareVersion") {
+			swVersion = param.Value
+		} else if strings.HasSuffix(param.Name, ".ManagementServer.ProvisioningCode") {
+			provisioningCode = param.Value
+		} else if strings.HasSuffix(param.Name, ".ManagementServer.ParameterKey") {
+			parameterKey = param.Value
+			break
+		}
+	}
+
+	deviceInfo := db.DeviceInfo{
+		DeviceID:             deviceIdString,
+		Manufacturer:         informMsg.DeviceId.Manufacturer,
+		OUI:                  informMsg.DeviceId.OUI,
+		ProductClass:         informMsg.DeviceId.ProductClass,
+		SerialNumber:         informMsg.DeviceId.SerialNumber,
+		ConnectionRequestURL: crUrl,
+		HardwareVersion:      hwVersion,
+		SoftwareVersion:      swVersion,
+		ProvisioningCode:     provisioningCode,
+		ParameterKey:         parameterKey,
+	}
+
+	if bootEvent {
+		fmt.Printf("Received BOOT/BOOTSTRAP Inform from device %s\n", sessionInfo.DeviceIdString)
+		db.AddDevice(sessionInfo.Context, deviceInfo)
+	} else {
+		fmt.Printf("Received regular Inform from device %s\n", sessionInfo.DeviceIdString)
+		db.UpdateDevice(sessionInfo.Context, deviceInfo)
+	}
+
+	informResponse := &cwmp.InformResponse{
+		CwmpMessage: cwmp.CwmpMessage{
+			Name: "InformResponse",
+			CwmpHeader: cwmp.CwmpHeader{
+				ID:             informMsg.GetID(),
+				UseCWMPVersion: sessionInfo.CwmpVersion.String(),
+			},
+		},
+		MaxEnvelopes: 1,
+	}
+
+	return informResponse
 }

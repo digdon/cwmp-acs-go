@@ -1,0 +1,126 @@
+package db
+
+import (
+	"context"
+	"database/sql"
+	"log"
+
+	_ "github.com/mattn/go-sqlite3"
+)
+
+var db *sql.DB
+
+func InitDB(ctx context.Context) {
+	log.Println("Initializing database connection")
+	// Open connection to DB (in this case, open a local SQLite database file, creating it if it doesn't exist)
+	var err error
+	db, err = sql.Open("sqlite3", "./cwmp_acs.db")
+	if err != nil {
+		log.Fatal("Error opening database:", err)
+	}
+
+	// Verify that the DB can be reached
+	if err := db.PingContext(ctx); err != nil {
+		log.Fatal("Error connecting to database:", err)
+	}
+
+	// Set up database for concurrent access (SQLite with WAL allows concurrent reads and writes, but we should still limit connections)
+	var journalMode string
+	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL;").Scan(&journalMode); err != nil || journalMode != "wal" {
+		log.Fatalf("Failed to enable WAL mode: mode=%s err=%v", journalMode, err)
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout=5000;"); err != nil {
+		log.Fatalf("Failed to set busy_timeout: %v", err)
+	}
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(2)
+
+	// Set up required tables
+	createDeviceTableSQL := `CREATE TABLE IF NOT EXISTS device (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		device_id TEXT NOT NULL UNIQUE,
+		manufacturer TEXT NOT NULL,
+		oui TEXT NOT NULL,
+		product_class TEXT NOT NULL,
+		serial_number TEXT NOT NULL,
+		connection_request_url TEXT NOT NULL,
+		parameter_key TEXT,
+		provisioning_code TEXT
+	);`
+
+	if _, err := db.ExecContext(ctx, createDeviceTableSQL); err != nil {
+		log.Fatalf("Create table failed: %v", err)
+	}
+}
+
+// nullableString converts an empty string to a NULL sql value.
+func nullableString(s string) sql.NullString {
+	return sql.NullString{String: s, Valid: s != ""}
+}
+
+func CloseDB() {
+	if db != nil {
+		if err := db.Close(); err != nil {
+			log.Println("Error closing database:", err)
+		}
+	}
+}
+
+func AddDevice(ctx context.Context, info DeviceInfo) error {
+	log.Printf("Registering device: %s", info.DeviceID)
+	upsertSQL := `INSERT INTO device (device_id, manufacturer, oui, product_class, serial_number, connection_request_url, parameter_key, provisioning_code)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(device_id) DO UPDATE SET
+			manufacturer = excluded.manufacturer,
+			oui = excluded.oui,
+			product_class = excluded.product_class,
+			serial_number = excluded.serial_number,
+			connection_request_url = excluded.connection_request_url,
+			parameter_key = excluded.parameter_key,
+			provisioning_code = excluded.provisioning_code;`
+	_, err := db.ExecContext(ctx, upsertSQL, info.DeviceID, info.Manufacturer, info.OUI, info.ProductClass, info.SerialNumber, info.ConnectionRequestURL, nullableString(info.ParameterKey), nullableString(info.ProvisioningCode))
+	if err != nil {
+		log.Printf("Error registering device %s: %v", info.DeviceID, err)
+		return err
+	}
+	return nil
+}
+
+func UpdateDevice(ctx context.Context, info DeviceInfo) error {
+	log.Printf("Updating device: %s", info.DeviceID)
+	updateSQL := `UPDATE device SET manufacturer = ?, oui = ?, product_class = ?, serial_number = ?, connection_request_url = ?, parameter_key = ?, provisioning_code = ? WHERE device_id = ?;`
+	_, err := db.ExecContext(ctx, updateSQL, info.Manufacturer, info.OUI, info.ProductClass, info.SerialNumber, info.ConnectionRequestURL, nullableString(info.ParameterKey), nullableString(info.ProvisioningCode), info.DeviceID)
+	if err != nil {
+		log.Printf("Error updating device %s: %v", info.DeviceID, err)
+		return err
+	}
+	return nil
+}
+
+func GetDevice(ctx context.Context, deviceID string) (info DeviceInfo, err error) {
+	log.Printf("Retrieving device: %s", deviceID)
+	querySQL := `SELECT manufacturer, oui, product_class, serial_number, connection_request_url, parameter_key, provisioning_code FROM device WHERE device_id = ?;`
+	row := db.QueryRowContext(ctx, querySQL, deviceID)
+
+	var manufacturer, oui, productClass, serialNumber, connectionRequestURL string
+	var parameterKey, provisioningCode sql.NullString
+	if err := row.Scan(&manufacturer, &oui, &productClass, &serialNumber, &connectionRequestURL, &parameterKey, &provisioningCode); err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("Device %s not found", deviceID)
+			return DeviceInfo{}, nil
+		}
+		log.Printf("Error retrieving device %s: %v", deviceID, err)
+		return DeviceInfo{}, err
+	}
+
+	return DeviceInfo{
+		DeviceID:             deviceID,
+		Manufacturer:         manufacturer,
+		OUI:                  oui,
+		ProductClass:         productClass,
+		SerialNumber:         serialNumber,
+		ConnectionRequestURL: connectionRequestURL,
+		ParameterKey:         parameterKey.String,
+		ProvisioningCode:     provisioningCode.String,
+	}, nil
+}
