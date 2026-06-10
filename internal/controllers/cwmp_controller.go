@@ -249,7 +249,7 @@ func handleIncomingMessage(xmlBytes []byte, sessionID string, ctx context.Contex
 			fmt.Printf("[%s] got a %s message, but there's no valid session\n", sessionID, rpcName)
 			return nil, sessionInfo, &errors.IncomingMessageError{
 				Header:      cpeHeader,
-				Source:      cwmp.FaultSourceCPE,
+				Source:      cwmp.FaultSourceServer,
 				FaultCode:   8001, // Invalid session state
 				FaultString: "Invalid session state",
 			}
@@ -260,7 +260,7 @@ func handleIncomingMessage(xmlBytes []byte, sessionID string, ctx context.Contex
 			fmt.Printf("[%s] got a %s message, but the current session state is invalid: %+v\n", sessionID, rpcName, sessionInfo.SessionState)
 			return nil, nil, &errors.IncomingMessageError{
 				Header:      cpeHeader,
-				Source:      cwmp.FaultSourceCPE,
+				Source:      cwmp.FaultSourceServer,
 				FaultCode:   8001, // Invalid session state
 				FaultString: "Invalid session state",
 			}
@@ -420,7 +420,7 @@ func parseCwmpMessageViaMap(cwmpVersion cwmp.SupportedCwmpVersion, rpcName strin
 
 	return nil, &errors.IncomingMessageError{
 		Header:      cpeHeader,
-		Source:      cwmp.FaultSourceCPE,
+		Source:      cwmp.FaultSourceServer,
 		FaultCode:   8000, // Method not supported
 		FaultString: fmt.Sprintf("Unsupported RPC method: %s", rpcName),
 	}
@@ -468,7 +468,7 @@ func sendOutgoingMsg(w http.ResponseWriter, sessionInfo *session.SessionInfo, me
 	w.Write([]byte(xmlString))
 }
 
-func processInformRequest(sessionInfo *session.SessionInfo, informMsg *cwmp.Inform) *cwmp.InformResponse {
+func processInformRequest(sessionInfo *session.SessionInfo, informMsg *cwmp.Inform) cwmp.CwmpMessageInterface {
 
 	// Generate the device ID string, which is comprised of the OUI, ProductClass and SerialNumber (if ProductClass is present), or just OUI and SerialNumber (if ProductClass is not present)
 	var deviceIdString string
@@ -483,7 +483,9 @@ func processInformRequest(sessionInfo *session.SessionInfo, informMsg *cwmp.Info
 	// Look for special events
 	bootEvent := false
 	for _, event := range informMsg.Events {
-		if event.EventCode == "0 BOOTSTRAP" || event.EventCode == "0 BOOT" {
+		if event.EventCode == "0 BOOTSTRAP" || event.EventCode == "1 BOOT" {
+			// We should really only need to check for BOOTSTRAP, but I suppose there may be a case where we might miss it?
+			// Certainly a bit of a hack for now...
 			bootEvent = true
 			break
 		}
@@ -498,11 +500,10 @@ func processInformRequest(sessionInfo *session.SessionInfo, informMsg *cwmp.Info
 			hwVersion = param.Value
 		} else if strings.HasSuffix(param.Name, ".DeviceInfo.SoftwareVersion") {
 			swVersion = param.Value
-		} else if strings.HasSuffix(param.Name, ".ManagementServer.ProvisioningCode") {
+		} else if strings.HasSuffix(param.Name, ".DeviceInfo.ProvisioningCode") {
 			provisioningCode = param.Value
 		} else if strings.HasSuffix(param.Name, ".ManagementServer.ParameterKey") {
 			parameterKey = param.Value
-			break
 		}
 	}
 
@@ -520,11 +521,29 @@ func processInformRequest(sessionInfo *session.SessionInfo, informMsg *cwmp.Info
 	}
 
 	if bootEvent {
+		// We're assuming that this is a new device (or factory reset, possibly ACS change?)
 		fmt.Printf("Received BOOT/BOOTSTRAP Inform from device %s\n", sessionInfo.DeviceIdString)
-		db.AddDevice(sessionInfo.Context, deviceInfo)
+		err := db.AddDevice(sessionInfo.Context, deviceInfo)
+		if err != nil {
+			return generateFault(informMsg.GetID(), cwmp.FaultSourceServer, 8002, "Failed to add device because of database error")
+		}
 	} else {
 		fmt.Printf("Received regular Inform from device %s\n", sessionInfo.DeviceIdString)
-		db.UpdateDevice(sessionInfo.Context, deviceInfo)
+
+		// Check to see if we're getting Informs from a device that is not currently registered
+		exists, err := db.IsDeviceRegistered(sessionInfo.Context, deviceInfo.DeviceID)
+		if err != nil {
+			return generateFault(informMsg.GetID(), cwmp.FaultSourceServer, 8002, "Failed to check device registration because of database error")
+		}
+		if !exists {
+			return generateFault(informMsg.GetID(), cwmp.FaultSourceServer, 8001, "Device not registered")
+		}
+
+		// Device was previously registered, so we'll update the existing record with any new info from this Inform
+		err = db.UpdateDevice(sessionInfo.Context, deviceInfo)
+		if err != nil {
+			return generateFault(informMsg.GetID(), cwmp.FaultSourceServer, 8002, "Failed to update device because of database error")
+		}
 	}
 
 	informResponse := &cwmp.InformResponse{
@@ -539,4 +558,18 @@ func processInformRequest(sessionInfo *session.SessionInfo, informMsg *cwmp.Info
 	}
 
 	return informResponse
+}
+
+func generateFault(id string, faultSource cwmp.FaultSource, faultCode int, faultString string) *cwmp.Fault {
+	return &cwmp.Fault{
+		CwmpMessage: cwmp.CwmpMessage{
+			Name: "Fault",
+			CwmpHeader: cwmp.CwmpHeader{
+				ID: id,
+			},
+		},
+		Source:      faultSource,
+		FaultCode:   faultCode,
+		FaultString: faultString,
+	}
 }

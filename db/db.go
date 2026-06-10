@@ -3,10 +3,14 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"log"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+var ErrDeviceNotFound = errors.New("device not found")
 
 var db *sql.DB
 
@@ -78,26 +82,38 @@ func AddDevice(ctx context.Context, info DeviceInfo) error {
 			connection_request_url = excluded.connection_request_url,
 			parameter_key = excluded.parameter_key,
 			provisioning_code = excluded.provisioning_code;`
-	_, err := db.ExecContext(ctx, upsertSQL, info.DeviceID, info.Manufacturer, info.OUI, info.ProductClass, info.SerialNumber, info.ConnectionRequestURL, nullableString(info.ParameterKey), nullableString(info.ProvisioningCode))
+	result, err := db.ExecContext(ctx, upsertSQL, info.DeviceID, info.Manufacturer, info.OUI, info.ProductClass, info.SerialNumber, info.ConnectionRequestURL, nullableString(info.ParameterKey), nullableString(info.ProvisioningCode))
 	if err != nil {
 		log.Printf("Error registering device %s: %v", info.DeviceID, err)
 		return err
 	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		log.Printf("Error getting rows affected for device %s: %v", info.DeviceID, err)
+		return err
+	}
+	fmt.Printf("Device %s registered successfully (rows affected: %d)\n", info.DeviceID, rowsAffected)
 	return nil
 }
 
 func UpdateDevice(ctx context.Context, info DeviceInfo) error {
 	log.Printf("Updating device: %s", info.DeviceID)
 	updateSQL := `UPDATE device SET manufacturer = ?, oui = ?, product_class = ?, serial_number = ?, connection_request_url = ?, parameter_key = ?, provisioning_code = ? WHERE device_id = ?;`
-	_, err := db.ExecContext(ctx, updateSQL, info.Manufacturer, info.OUI, info.ProductClass, info.SerialNumber, info.ConnectionRequestURL, nullableString(info.ParameterKey), nullableString(info.ProvisioningCode), info.DeviceID)
+	result, err := db.ExecContext(ctx, updateSQL, info.Manufacturer, info.OUI, info.ProductClass, info.SerialNumber, info.ConnectionRequestURL, nullableString(info.ParameterKey), nullableString(info.ProvisioningCode), info.DeviceID)
 	if err != nil {
 		log.Printf("Error updating device %s: %v", info.DeviceID, err)
 		return err
 	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		log.Printf("Error getting rows affected for device %s: %v", info.DeviceID, err)
+		return err
+	}
+	fmt.Printf("Device %s updated successfully (rows affected: %d)\n", info.DeviceID, rowsAffected)
 	return nil
 }
 
-func GetDevice(ctx context.Context, deviceID string) (info DeviceInfo, err error) {
+func GetDevice(ctx context.Context, deviceID string) (info *DeviceInfo, err error) {
 	log.Printf("Retrieving device: %s", deviceID)
 	querySQL := `SELECT manufacturer, oui, product_class, serial_number, connection_request_url, parameter_key, provisioning_code FROM device WHERE device_id = ?;`
 	row := db.QueryRowContext(ctx, querySQL, deviceID)
@@ -107,13 +123,13 @@ func GetDevice(ctx context.Context, deviceID string) (info DeviceInfo, err error
 	if err := row.Scan(&manufacturer, &oui, &productClass, &serialNumber, &connectionRequestURL, &parameterKey, &provisioningCode); err != nil {
 		if err == sql.ErrNoRows {
 			log.Printf("Device %s not found", deviceID)
-			return DeviceInfo{}, nil
+			return nil, ErrDeviceNotFound
 		}
 		log.Printf("Error retrieving device %s: %v", deviceID, err)
-		return DeviceInfo{}, err
+		return nil, err
 	}
 
-	return DeviceInfo{
+	return &DeviceInfo{
 		DeviceID:             deviceID,
 		Manufacturer:         manufacturer,
 		OUI:                  oui,
@@ -123,4 +139,17 @@ func GetDevice(ctx context.Context, deviceID string) (info DeviceInfo, err error
 		ParameterKey:         parameterKey.String,
 		ProvisioningCode:     provisioningCode.String,
 	}, nil
+}
+
+func IsDeviceRegistered(ctx context.Context, deviceID string) (bool, error) {
+	log.Printf("Checking if device is registered: %s", deviceID)
+	querySQL := `SELECT COUNT(1) FROM device WHERE device_id = ?;`
+	row := db.QueryRowContext(ctx, querySQL, deviceID)
+
+	var count int
+	if err := row.Scan(&count); err != nil {
+		log.Printf("Error checking registration for device %s: %v", deviceID, err)
+		return false, err
+	}
+	return count > 0, nil
 }
