@@ -86,11 +86,44 @@ type SetParameterAttributeStruct struct {
 
 // Full message structures
 
+type AddObject struct {
+	CwmpMessage
+	ObjectName   string
+	ParameterKey string
+}
+
+type AddObjectResponse struct {
+	CwmpMessage
+	InstanceNumber int
+	Status         int
+}
+
+type DeleteObject struct {
+	CwmpMessage
+	ObjectName   string
+	ParameterKey string
+}
+
+type DeleteObjectResponse struct {
+	CwmpMessage
+	Status int
+}
+
 type Fault struct {
 	CwmpMessage
 	Source      FaultSource
 	FaultCode   int
 	FaultString string
+}
+
+type GetParameterAttributes struct {
+	CwmpMessage
+	ParameterNames []string
+}
+
+type GetParameterAttributesResponse struct {
+	CwmpMessage
+	ParameterList []ParameterAttributeStruct
 }
 
 type GetParameterNames struct {

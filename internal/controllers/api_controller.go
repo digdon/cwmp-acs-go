@@ -26,8 +26,22 @@ type ApiRequest struct {
 
 // Parameter structs for each supported outbound CWMP message type.
 
+type AddObjectParams struct {
+	ObjectName   string `json:"object_name"`
+	ParameterKey string `json:"parameter_key,omitempty"`
+}
+
+type DeleteObjectParams struct {
+	ObjectName   string `json:"object_name"`
+	ParameterKey string `json:"parameter_key,omitempty"`
+}
+
+type GetParameterAttributesParams struct {
+	ParameterNames []string `json:"parameter_names"`
+}
+
 type GetParameterValuesParams struct {
-	Names []string `json:"names"`
+	ParameterNames []string `json:"parameter_names"`
 }
 
 type GetParameterNamesParams struct {
@@ -39,6 +53,10 @@ type RebootParams struct {
 	CommandKey string `json:"command_key"`
 }
 
+type SetParameterAttributesParams struct {
+	Attributes []SetParameterAttributeEntry `json:"attributes"`
+}
+
 type SetParameterAttributeEntry struct {
 	Name               string   `json:"name"`
 	NotificationChange bool     `json:"notification_change"`
@@ -47,8 +65,15 @@ type SetParameterAttributeEntry struct {
 	AccessList         []string `json:"access_list"`
 }
 
-type SetParameterAttributesParams struct {
-	Attributes []SetParameterAttributeEntry `json:"attributes"`
+type SetParameterValuesParams struct {
+	ParameterList []SetParameterValueEntry `json:"parameter_list"`
+	ParameterKey  string                   `json:"parameter_key,omitempty"`
+}
+
+type SetParameterValueEntry struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Type  string `json:"type"`
 }
 
 func ApiHandler(w http.ResponseWriter, r *http.Request) {
@@ -108,17 +133,58 @@ func buildCwmpMessage(req ApiRequest) (cwmp.CwmpMessageInterface, error) {
 
 func buildCwmpMessageFromParts(id, name string, params json.RawMessage) (cwmp.CwmpMessageInterface, error) {
 	switch name {
+	case "AddObject":
+		var p AddObjectParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid parameters for AddObject: %w", err)
+		}
+		if p.ObjectName == "" {
+			return nil, fmt.Errorf("AddObject requires object_name")
+		}
+		return &cwmp.AddObject{
+			CwmpMessage:  cwmp.CwmpMessage{Name: "AddObject", CwmpHeader: cwmp.CwmpHeader{ID: id}},
+			ObjectName:   p.ObjectName,
+			ParameterKey: p.ParameterKey,
+		}, nil
+
+	case "DeleteObject":
+		var p DeleteObjectParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid parameters for DeleteObject: %w", err)
+		}
+		if p.ObjectName == "" {
+			return nil, fmt.Errorf("DeleteObject requires object_name")
+		}
+		return &cwmp.DeleteObject{
+			CwmpMessage:  cwmp.CwmpMessage{Name: "DeleteObject", CwmpHeader: cwmp.CwmpHeader{ID: id}},
+			ObjectName:   p.ObjectName,
+			ParameterKey: p.ParameterKey,
+		}, nil
+
+	case "GetParameterAttributes":
+		var p GetParameterAttributesParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid parameters for GetParameterAttributes: %w", err)
+		}
+		if len(p.ParameterNames) == 0 {
+			return nil, fmt.Errorf("GetParameterAttributes requires at least one name")
+		}
+		return &cwmp.GetParameterAttributes{
+			CwmpMessage:    cwmp.CwmpMessage{Name: "GetParameterAttributes", CwmpHeader: cwmp.CwmpHeader{ID: id}},
+			ParameterNames: p.ParameterNames,
+		}, nil
+
 	case "GetParameterValues":
 		var p GetParameterValuesParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid parameters for GetParameterValues: %w", err)
 		}
-		if len(p.Names) == 0 {
+		if len(p.ParameterNames) == 0 {
 			return nil, fmt.Errorf("GetParameterValues requires at least one name")
 		}
 		return &cwmp.GetParameterValues{
 			CwmpMessage:    cwmp.CwmpMessage{Name: "GetParameterValues", CwmpHeader: cwmp.CwmpHeader{ID: id}},
-			ParameterNames: p.Names,
+			ParameterNames: p.ParameterNames,
 		}, nil
 
 	case "GetParameterNames":
@@ -170,6 +236,28 @@ func buildCwmpMessageFromParts(id, name string, params json.RawMessage) (cwmp.Cw
 		return &cwmp.SetParameterAttributes{
 			CwmpMessage:   cwmp.CwmpMessage{Name: "SetParameterAttributes", CwmpHeader: cwmp.CwmpHeader{ID: id}},
 			ParameterList: attrs,
+		}, nil
+
+	case "SetParameterValues":
+		var p SetParameterValuesParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid parameters for SetParameterValues: %w", err)
+		}
+		if len(p.ParameterList) == 0 {
+			return nil, fmt.Errorf("SetParameterValues requires at least one parameter entry")
+		}
+		paramList := make([]cwmp.ParameterValueStruct, len(p.ParameterList))
+		for i, param := range p.ParameterList {
+			paramList[i] = cwmp.ParameterValueStruct{
+				Name:  param.Name,
+				Value: param.Value,
+				Type:  param.Type,
+			}
+		}
+		return &cwmp.SetParameterValues{
+			CwmpMessage:   cwmp.CwmpMessage{Name: "SetParameterValues", CwmpHeader: cwmp.CwmpHeader{ID: id}},
+			ParameterList: paramList,
+			ParameterKey:  p.ParameterKey,
 		}, nil
 
 	default:

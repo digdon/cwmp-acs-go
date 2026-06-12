@@ -10,20 +10,88 @@ import (
 )
 
 var CwmpMessageGenerators = map[string]xml.MessageGenerator{
-	// "AddObject":                GenerateAddObject,
-	// "DeleteObject":             GenerateDeleteObject,
+	"AddObject":    GenerateAddObject,
+	"DeleteObject": GenerateDeleteObject,
 	// "Download":                 GenerateDownload,
-	"Fault": GenerateFault,
-	// "GetParameterAttributes":   GenerateGetParameterAttributes,
-	"GetParameterNames": GenerateGetParameterNames,
-	// "GetParameterValues":       GenerateGetParameterValues,
+	"Fault":                  GenerateFault,
+	"GetParameterAttributes": GenerateGetParameterAttributes,
+	"GetParameterNames":      GenerateGetParameterNames,
+	"GetParameterValues":     GenerateGetParameterValues,
 	"GetRPCMethods":          GenerateGetRPCMethods,
 	"GetRPCMethodsResponse":  GenerateGetRPCMethodsResponse,
 	"InformResponse":         GenerateInformResponse,
 	"Reboot":                 GenerateReboot,
 	"SetParameterAttributes": GenerateSetParameterAttributes,
-	// "SetParameterValues":       GenerateSetParameterValues,
+	"SetParameterValues":     GenerateSetParameterValues,
 	// "TransferCompleteResponse": GenerateTransferCompleteResponse,
+}
+
+func GenerateAddObject(message cwmp.CwmpMessageInterface, namespaces map[xml.NamespaceID]xml.Namespace) (string, error) {
+	addObject, ok := message.(*cwmp.AddObject)
+	if !ok {
+		return "", fmt.Errorf("message is not of type AddObject")
+	}
+
+	soapenv := namespaces[xml.SOAPENV]
+	soapenc := namespaces[xml.SOAPENC]
+	xsd := namespaces[xml.XSD]
+	xsi := namespaces[xml.XSI]
+	cwmpNS := namespaces[xml.CWMP]
+
+	envelope := dom.NewElement(soapenv.Prefix+":Envelope").
+		AddAttr("xmlns:"+soapenv.Prefix, soapenv.URL).
+		AddAttr("xmlns:"+soapenc.Prefix, soapenc.URL).
+		AddAttr("xmlns:"+xsd.Prefix, xsd.URL).
+		AddAttr("xmlns:"+xsi.Prefix, xsi.URL).
+		AddAttr("xmlns:"+cwmpNS.Prefix, cwmpNS.URL)
+
+	header := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Header"))
+	header.AddChild(
+		dom.NewElement(cwmpNS.Prefix+":ID").
+			AddAttr(soapenv.Prefix+":mustUnderstand", "1").
+			SetText(addObject.GetID()),
+	)
+
+	body := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Body"))
+	ao := body.AddChild(dom.NewElement(cwmpNS.Prefix + ":AddObject"))
+	ao.AddChild(dom.NewElement("ObjectName")).SetText(addObject.ObjectName)
+	ao.AddChild(dom.NewElement("ParameterKey")).SetText(addObject.ParameterKey)
+
+	return dom.NewDocument(envelope).Serialize()
+}
+
+func GenerateDeleteObject(message cwmp.CwmpMessageInterface, namespaces map[xml.NamespaceID]xml.Namespace) (string, error) {
+	deleteObject, ok := message.(*cwmp.DeleteObject)
+	if !ok {
+		return "", fmt.Errorf("message is not of type DeleteObject")
+	}
+
+	soapenv := namespaces[xml.SOAPENV]
+	soapenc := namespaces[xml.SOAPENC]
+	xsd := namespaces[xml.XSD]
+	xsi := namespaces[xml.XSI]
+	cwmpNS := namespaces[xml.CWMP]
+
+	envelope := dom.NewElement(soapenv.Prefix+":Envelope").
+		AddAttr("xmlns:"+soapenv.Prefix, soapenv.URL).
+		AddAttr("xmlns:"+soapenc.Prefix, soapenc.URL).
+		AddAttr("xmlns:"+xsd.Prefix, xsd.URL).
+		AddAttr("xmlns:"+xsi.Prefix, xsi.URL).
+		AddAttr("xmlns:"+cwmpNS.Prefix, cwmpNS.URL)
+
+	header := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Header"))
+	header.AddChild(
+		dom.NewElement(cwmpNS.Prefix+":ID").
+			AddAttr(soapenv.Prefix+":mustUnderstand", "1").
+			SetText(deleteObject.GetID()),
+	)
+
+	body := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Body"))
+	do := body.AddChild(dom.NewElement(cwmpNS.Prefix + ":DeleteObject"))
+	do.AddChild(dom.NewElement("ObjectName")).SetText(deleteObject.ObjectName)
+	do.AddChild(dom.NewElement("ParameterKey")).SetText(deleteObject.ParameterKey)
+
+	return dom.NewDocument(envelope).Serialize()
 }
 
 func GenerateFault(message cwmp.CwmpMessageInterface, namespaces map[xml.NamespaceID]xml.Namespace) (string, error) {
@@ -65,6 +133,43 @@ func GenerateFault(message cwmp.CwmpMessageInterface, namespaces map[xml.Namespa
 	return dom.NewDocument(envelope).Serialize()
 }
 
+func GenerateGetParameterAttributes(message cwmp.CwmpMessageInterface, namespaces map[xml.NamespaceID]xml.Namespace) (string, error) {
+	getParameterAttributes, ok := message.(*cwmp.GetParameterAttributes)
+	if !ok {
+		return "", fmt.Errorf("message is not of type GetParameterAttributes")
+	}
+
+	soapenv := namespaces[xml.SOAPENV]
+	soapenc := namespaces[xml.SOAPENC]
+	xsd := namespaces[xml.XSD]
+	xsi := namespaces[xml.XSI]
+	cwmpNS := namespaces[xml.CWMP]
+
+	envelope := dom.NewElement(soapenv.Prefix+":Envelope").
+		AddAttr("xmlns:"+soapenv.Prefix, soapenv.URL).
+		AddAttr("xmlns:"+soapenc.Prefix, soapenc.URL).
+		AddAttr("xmlns:"+xsd.Prefix, xsd.URL).
+		AddAttr("xmlns:"+xsi.Prefix, xsi.URL).
+		AddAttr("xmlns:"+cwmpNS.Prefix, cwmpNS.URL)
+
+	header := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Header"))
+	header.AddChild(
+		dom.NewElement(cwmpNS.Prefix+":ID").
+			AddAttr(soapenv.Prefix+":mustUnderstand", "1").
+			SetText(getParameterAttributes.GetID()),
+	)
+
+	body := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Body"))
+	gpa := body.AddChild(dom.NewElement(cwmpNS.Prefix + ":GetParameterAttributes"))
+	paramList := gpa.AddChild(dom.NewElement("ParameterNames"))
+	paramList.AddAttr(soapenc.Prefix+":arrayType", fmt.Sprintf("%s:string[%d]", xsd.Prefix, len(getParameterAttributes.ParameterNames)))
+	for _, name := range getParameterAttributes.ParameterNames {
+		paramList.AddChild(dom.NewElement("string")).SetText(name)
+	}
+
+	return dom.NewDocument(envelope).Serialize()
+}
+
 func GenerateGetParameterNames(message cwmp.CwmpMessageInterface, namespaces map[xml.NamespaceID]xml.Namespace) (string, error) {
 	getParameterNames, ok := message.(*cwmp.GetParameterNames)
 	if !ok {
@@ -95,6 +200,43 @@ func GenerateGetParameterNames(message cwmp.CwmpMessageInterface, namespaces map
 	gpn := body.AddChild(dom.NewElement(cwmpNS.Prefix + ":GetParameterNames"))
 	gpn.AddChild(dom.NewElement("ParameterPath")).SetText(getParameterNames.ParameterPath)
 	gpn.AddChild(dom.NewElement("NextLevel")).SetText(strconv.FormatBool(getParameterNames.NextLevel))
+
+	return dom.NewDocument(envelope).Serialize()
+}
+
+func GenerateGetParameterValues(message cwmp.CwmpMessageInterface, namespaces map[xml.NamespaceID]xml.Namespace) (string, error) {
+	getParameterValues, ok := message.(*cwmp.GetParameterValues)
+	if !ok {
+		return "", fmt.Errorf("message is not of type GetParameterValues")
+	}
+
+	soapenv := namespaces[xml.SOAPENV]
+	soapenc := namespaces[xml.SOAPENC]
+	xsd := namespaces[xml.XSD]
+	xsi := namespaces[xml.XSI]
+	cwmpNS := namespaces[xml.CWMP]
+
+	envelope := dom.NewElement(soapenv.Prefix+":Envelope").
+		AddAttr("xmlns:"+soapenv.Prefix, soapenv.URL).
+		AddAttr("xmlns:"+soapenc.Prefix, soapenc.URL).
+		AddAttr("xmlns:"+xsd.Prefix, xsd.URL).
+		AddAttr("xmlns:"+xsi.Prefix, xsi.URL).
+		AddAttr("xmlns:"+cwmpNS.Prefix, cwmpNS.URL)
+
+	header := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Header"))
+	header.AddChild(
+		dom.NewElement(cwmpNS.Prefix+":ID").
+			AddAttr(soapenv.Prefix+":mustUnderstand", "1").
+			SetText(getParameterValues.GetID()),
+	)
+
+	body := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Body"))
+	gpv := body.AddChild(dom.NewElement(cwmpNS.Prefix + ":GetParameterValues"))
+	paramList := gpv.AddChild(dom.NewElement("ParameterNames"))
+	paramList.AddAttr(soapenc.Prefix+":arrayType", fmt.Sprintf("%s:string[%d]", xsd.Prefix, len(getParameterValues.ParameterNames)))
+	for _, name := range getParameterValues.ParameterNames {
+		paramList.AddChild(dom.NewElement("string")).SetText(name)
+	}
 
 	return dom.NewDocument(envelope).Serialize()
 }
@@ -160,7 +302,7 @@ func GenerateGetRPCMethodsResponse(message cwmp.CwmpMessageInterface, namespaces
 	body := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Body"))
 	grmr := body.AddChild(dom.NewElement(cwmpNS.Prefix + ":GetRPCMethodsResponse"))
 	methodList := grmr.AddChild(dom.NewElement("MethodList"))
-	methodList.AddAttr(soapenv.Prefix+":arrayType", fmt.Sprintf("%s:string[%d]", xsd.Prefix, len(getRPCMethodsResponse.MethodList)))
+	methodList.AddAttr(soapenc.Prefix+":arrayType", fmt.Sprintf("%s:string[%d]", xsd.Prefix, len(getRPCMethodsResponse.MethodList)))
 	for _, method := range getRPCMethodsResponse.MethodList {
 		methodList.AddChild(dom.NewElement("string")).SetText(method)
 	}
@@ -271,7 +413,7 @@ func GenerateSetParameterAttributes(message cwmp.CwmpMessageInterface, namespace
 	body := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Body"))
 	spa := body.AddChild(dom.NewElement(cwmpNS.Prefix + ":SetParameterAttributes"))
 	paramList := spa.AddChild(dom.NewElement("ParameterList"))
-	paramList.AddAttr(soapenv.Prefix+":arrayType", fmt.Sprintf("%s:SetParameterAttributeStruct[%d]", cwmpNS.Prefix, len(setParameterAttributes.ParameterList)))
+	paramList.AddAttr(soapenc.Prefix+":arrayType", fmt.Sprintf("%s:SetParameterAttributeStruct[%d]", cwmpNS.Prefix, len(setParameterAttributes.ParameterList)))
 	for _, param := range setParameterAttributes.ParameterList {
 		paramEl := paramList.AddChild(dom.NewElement("SetParameterAttributeStruct"))
 		paramEl.AddChild(dom.NewElement("Name").SetText(param.Name))
@@ -279,11 +421,51 @@ func GenerateSetParameterAttributes(message cwmp.CwmpMessageInterface, namespace
 		paramEl.AddChild(dom.NewElement("Notification").SetText(strconv.Itoa(param.Notification)))
 		paramEl.AddChild(dom.NewElement("AccessListChange").SetText(strconv.FormatBool(param.AccessListChange)))
 		accessListEl := paramEl.AddChild(dom.NewElement("AccessList"))
-		accessListEl.AddAttr(soapenv.Prefix+":arrayType", fmt.Sprintf("%s:string[%d]", xsd.Prefix, len(param.AccessList)))
+		accessListEl.AddAttr(soapenc.Prefix+":arrayType", fmt.Sprintf("%s:string[%d]", xsd.Prefix, len(param.AccessList)))
 		for _, access := range param.AccessList {
 			accessListEl.AddChild(dom.NewElement("string").SetText(access))
 		}
 	}
+
+	return dom.NewDocument(envelope).Serialize()
+}
+
+func GenerateSetParameterValues(message cwmp.CwmpMessageInterface, namespaces map[xml.NamespaceID]xml.Namespace) (string, error) {
+	setParameterValues, ok := message.(*cwmp.SetParameterValues)
+	if !ok {
+		return "", fmt.Errorf("message is not of type SetParameterValues")
+	}
+
+	soapenv := namespaces[xml.SOAPENV]
+	soapenc := namespaces[xml.SOAPENC]
+	xsd := namespaces[xml.XSD]
+	xsi := namespaces[xml.XSI]
+	cwmpNS := namespaces[xml.CWMP]
+
+	envelope := dom.NewElement(soapenv.Prefix+":Envelope").
+		AddAttr("xmlns:"+soapenv.Prefix, soapenv.URL).
+		AddAttr("xmlns:"+soapenc.Prefix, soapenc.URL).
+		AddAttr("xmlns:"+xsd.Prefix, xsd.URL).
+		AddAttr("xmlns:"+xsi.Prefix, xsi.URL).
+		AddAttr("xmlns:"+cwmpNS.Prefix, cwmpNS.URL)
+
+	header := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Header"))
+	header.AddChild(
+		dom.NewElement(cwmpNS.Prefix+":ID").
+			AddAttr(soapenv.Prefix+":mustUnderstand", "1").
+			SetText(setParameterValues.GetID()),
+	)
+
+	body := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Body"))
+	spv := body.AddChild(dom.NewElement(cwmpNS.Prefix + ":SetParameterValues"))
+	paramList := spv.AddChild(dom.NewElement("ParameterList"))
+	paramList.AddAttr(soapenc.Prefix+":arrayType", fmt.Sprintf("%s:ParameterValueStruct[%d]", cwmpNS.Prefix, len(setParameterValues.ParameterList)))
+	for _, param := range setParameterValues.ParameterList {
+		paramEl := paramList.AddChild(dom.NewElement("ParameterValueStruct"))
+		paramEl.AddChild(dom.NewElement("Name").SetText(param.Name))
+		paramEl.AddChild(dom.NewElement("Value").SetText(param.Value)).AddAttr(xsi.Prefix+":type", fmt.Sprintf("%s:%s", xsd.Prefix, param.Type))
+	}
+	spv.AddChild(dom.NewElement("ParameterKey").SetText(setParameterValues.ParameterKey))
 
 	return dom.NewDocument(envelope).Serialize()
 }
