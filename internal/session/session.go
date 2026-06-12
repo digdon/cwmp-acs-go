@@ -31,10 +31,11 @@ type SessionInfo struct {
 	LastOutgoingMessageTime int64
 	XmlNamespaces           map[xml.NamespaceID]xml.Namespace
 	Context                 context.Context
+	ActiveRPC               cwmp.CwmpMessageInterface
 }
 
 var SessionIdActiveSessions = map[string]*SessionInfo{}
-var DeviceInfoActiveSessions = map[cwmp.DeviceId]*SessionInfo{}
+var DeviceIdStringActiveSessions = map[string]*SessionInfo{}
 
 func CreateNewSession() *SessionInfo {
 	sessionID := uuid.NewString()
@@ -47,6 +48,7 @@ func CreateNewSession() *SessionInfo {
 		LastIncomingMessageTime: 0,
 		LastOutgoingMessageTime: 0,
 		XmlNamespaces:           map[xml.NamespaceID]xml.Namespace{},
+		ActiveRPC:               nil,
 	}
 
 	return sessionInfo
