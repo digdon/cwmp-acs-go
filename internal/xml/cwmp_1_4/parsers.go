@@ -11,23 +11,84 @@ import (
 )
 
 var CwmpMessageParsers = map[string]xml.MessageParser{
-	// "AddObjectResponse":              ParseAddObjectResponse,
-	// "DeleteObjectResponse":           ParseDeleteObjectResponse,
+	"AddObjectResponse":    ParseAddObjectResponse,
+	"DeleteObjectResponse": ParseDeleteObjectResponse,
 	// "DownloadResponse":               ParseDownloadResponse,
-	"Fault": ParseFault,
-	// "GetParameterAttributesResponse": ParseGetParameterAttributesResponse,
-	"GetParameterNamesResponse": ParseGetParameterNamesResponse,
-	// "GetParameterValuesResponse":     ParseGetParameterValuesResponse,
+	"Fault":                          ParseFault,
+	"GetParameterAttributesResponse": ParseGetParameterAttributesResponse,
+	"GetParameterNamesResponse":      ParseGetParameterNamesResponse,
+	"GetParameterValuesResponse":     ParseGetParameterValuesResponse,
 	"GetRPCMethods":                  ParseGetRPCMethods,
 	"GetRPCMethodsResponse":          ParseGetRPCMethodsResponse,
 	"Inform":                         ParseInform,
 	"RebootResponse":                 ParseRebootResponse,
 	"SetParameterAttributesResponse": ParseSetParameterAttributesResponse,
-	// "SetParameterValuesResponse": ParseSetParameterValuesResponse,
+	"SetParameterValuesResponse":     ParseSetParameterValuesResponse,
 	// "TransferComplete":           ParseTransferComplete,
 }
 
 type SOAPElement = xml.SOAPElement
+
+func ParseAddObjectResponse(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
+	addObjectResponse := cwmp.AddObjectResponse{
+		CwmpMessage: cwmp.CwmpMessage{
+			Name: "AddObjectResponse", CwmpHeader: cpeHeader,
+		},
+	}
+
+	for _, child := range elem.Children {
+		switch child.Name.Local {
+		case "InstanceNumber":
+			instanceNumber, err := strconv.Atoi(child.Text)
+			if err != nil {
+				return nil, &errors.IncomingMessageError{
+					Source:      cwmp.FaultSourceCPE,
+					FaultCode:   8003, // Invalid arguments
+					FaultString: "InstanceNumber is not valid integer in AddObjectResponse",
+				}
+			}
+			addObjectResponse.InstanceNumber = instanceNumber
+
+		case "Status":
+			status, err := strconv.Atoi(child.Text)
+			if err != nil {
+				return nil, &errors.IncomingMessageError{
+					Source:      cwmp.FaultSourceCPE,
+					FaultCode:   8003, // Invalid arguments
+					FaultString: "Status is not valid integer in AddObjectResponse",
+				}
+			}
+			addObjectResponse.Status = status
+		}
+	}
+
+	return &addObjectResponse, nil
+}
+
+func ParseDeleteObjectResponse(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
+	deleteObjectResponse := cwmp.DeleteObjectResponse{
+		CwmpMessage: cwmp.CwmpMessage{
+			Name: "DeleteObjectResponse", CwmpHeader: cpeHeader,
+		},
+	}
+
+	for _, child := range elem.Children {
+		switch child.Name.Local {
+		case "Status":
+			status, err := strconv.Atoi(child.Text)
+			if err != nil {
+				return nil, &errors.IncomingMessageError{
+					Source:      cwmp.FaultSourceCPE,
+					FaultCode:   8003, // Invalid arguments
+					FaultString: "Status is not valid integer in DeleteObjectResponse",
+				}
+			}
+			deleteObjectResponse.Status = status
+		}
+	}
+
+	return &deleteObjectResponse, nil
+}
 
 func ParseFault(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
 	fmt.Println("Parsing Fault")
@@ -76,7 +137,117 @@ func ParseFault(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageIn
 	return &fault, nil
 }
 
-var parameterInfoStructRegex = regexp.MustCompile(`^[^:]+:ParameterInfoStruct\[(\d+)\]$`)
+func ParseGetParameterAttributesResponse(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
+	fmt.Println("Parsing GetParameterAttributesResponse")
+	getParameterAttributesResponse := cwmp.GetParameterAttributesResponse{
+		CwmpMessage: cwmp.CwmpMessage{
+			Name: "GetParameterAttributesResponse", CwmpHeader: cpeHeader,
+		},
+	}
+	for _, child := range elem.Children {
+		switch child.Name.Local {
+		case "ParameterList":
+			parameters, err := parseParameterAttributeStructList(child)
+			if err != nil {
+				return nil, err
+			}
+			getParameterAttributesResponse.ParameterList = parameters
+		}
+	}
+
+	return &getParameterAttributesResponse, nil
+}
+
+var parameterAttributeStructRegex = regexp.MustCompile(`^[^:]+:ParameterAttributeStruct\[(\d+)\]$`)
+
+func parseParameterAttributeStructList(elem SOAPElement) ([]cwmp.ParameterAttributeStruct, *errors.IncomingMessageError) {
+	paramList := []cwmp.ParameterAttributeStruct{}
+
+	// Start by looking for the arrayType attribute to confirm this is an array of ParameterAttributeStruct
+	var arrayType string
+	for _, attr := range elem.Attrs {
+		if attr.Name.Local == "arrayType" {
+			arrayType = attr.Value
+			break
+		}
+	}
+
+	if arrayType == "" {
+		return nil, &errors.IncomingMessageError{
+			Source:      cwmp.FaultSourceCPE,
+			FaultCode:   8003, // Invalid arguments
+			FaultString: "ParameterList is missing arrayType attribute",
+		}
+	}
+
+	// Now verify the arrayType is correct for an array of ParameterAttributeStruct
+	matches := parameterAttributeStructRegex.FindStringSubmatch(arrayType)
+	if len(matches) != 2 {
+		return nil, &errors.IncomingMessageError{
+			Source:      cwmp.FaultSourceCPE,
+			FaultCode:   8003, // Invalid arguments
+			FaultString: fmt.Sprintf("invalid arrayType for ParameterList: %s", arrayType),
+		}
+	}
+
+	// Capture the item count from the arrayType for later verification
+	itemCount, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return nil, &errors.IncomingMessageError{
+			Source:      cwmp.FaultSourceCPE,
+			FaultCode:   8003, // Invalid arguments
+			FaultString: fmt.Sprintf("invalid item count in arrayType: %v", err),
+		}
+	}
+
+	// Now parse each ParameterAttributeStruct item in the list
+	for _, paramChild := range elem.Children {
+		if paramChild.Name.Local != "ParameterAttributeStruct" {
+			return nil, &errors.IncomingMessageError{
+				Source:      cwmp.FaultSourceCPE,
+				FaultCode:   8003, // Invalid arguments
+				FaultString: fmt.Sprintf("unexpected element in ParameterList: %s", paramChild.Name.Local),
+			}
+		}
+		var param cwmp.ParameterAttributeStruct
+		for _, paramStructChild := range paramChild.Children {
+			switch paramStructChild.Name.Local {
+			case "Name":
+				param.Name = paramStructChild.Text
+			case "Notification":
+				var err error
+				param.Notification, err = strconv.Atoi(paramStructChild.Text)
+				// TODO: We should also be validating that the Notification value is within the allowed range of 0-6 here as well (based on CWMP version)
+				if err != nil {
+					return nil, &errors.IncomingMessageError{
+						Source:      cwmp.FaultSourceCPE,
+						FaultCode:   8003, // Invalid arguments
+						FaultString: fmt.Sprintf("invalid integer value for Notification in ParameterAttributeStruct: %v", err),
+					}
+				}
+			case "AccessList":
+				// TODO: This is actually an array of type string, so we really should be doing the full array processing... we'll get to this later
+				for _, accessListChild := range paramStructChild.Children {
+					if accessListChild.Name.Local == "string" {
+						param.AccessList = append(param.AccessList, accessListChild.Text)
+					}
+				}
+			}
+		}
+		paramList = append(paramList, param)
+	}
+
+	// Verify the item count matches the arrayType
+	if len(paramList) != itemCount {
+		return nil, &errors.IncomingMessageError{
+			Source:      cwmp.FaultSourceCPE,
+			FaultCode:   8003, // Invalid arguments
+			FaultString: fmt.Sprintf("mismatch between arrayType item count (%d) and actual items (%d)", itemCount, len(paramList)),
+		}
+	}
+
+	return paramList, nil
+}
 
 func ParseGetParameterNamesResponse(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
 	fmt.Println("Parsing GetParameterNamesResponse")
@@ -100,6 +271,8 @@ func ParseGetParameterNamesResponse(elem SOAPElement, cpeHeader cwmp.CwmpHeader)
 
 	return &getParameterNamesResponse, nil
 }
+
+var parameterInfoStructRegex = regexp.MustCompile(`^[^:]+:ParameterInfoStruct\[(\d+)\]$`)
 
 func parseParameterInfoStructList(elem SOAPElement) ([]cwmp.ParameterInfoStruct, *errors.IncomingMessageError) {
 	paramList := []cwmp.ParameterInfoStruct{}
@@ -186,6 +359,29 @@ func parseParameterInfoStructList(elem SOAPElement) ([]cwmp.ParameterInfoStruct,
 	}
 
 	return paramList, nil
+}
+
+func ParseGetParameterValuesResponse(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
+	fmt.Println("Parsing GetParameterValuesResponse")
+
+	getParameterValuesResponse := cwmp.GetParameterValuesResponse{
+		CwmpMessage: cwmp.CwmpMessage{
+			Name: "GetParameterValuesResponse", CwmpHeader: cpeHeader,
+		},
+	}
+
+	for _, child := range elem.Children {
+		switch child.Name.Local {
+		case "ParameterList":
+			parameters, err := parseParameterValueStructList(child)
+			if err != nil {
+				return nil, err
+			}
+			getParameterValuesResponse.ParameterList = parameters
+		}
+	}
+
+	return &getParameterValuesResponse, nil
 }
 
 func ParseGetRPCMethods(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
@@ -335,7 +531,7 @@ func ParseInform(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageI
 			inform.RetryCount = retryCount
 
 		case "ParameterList":
-			paramList, err := parseParameterList(child)
+			paramList, err := parseParameterValueStructList(child)
 			if err != nil {
 				return nil, err
 			}
@@ -482,7 +678,7 @@ func parseEventList(elem SOAPElement) ([]cwmp.Event, *errors.IncomingMessageErro
 
 var parameterValueStructRegex = regexp.MustCompile(`^[^:]+:ParameterValueStruct\[(\d+)\]$`)
 
-func parseParameterList(elem SOAPElement) ([]cwmp.ParameterValueStruct, *errors.IncomingMessageError) {
+func parseParameterValueStructList(elem SOAPElement) ([]cwmp.ParameterValueStruct, *errors.IncomingMessageError) {
 	paramList := []cwmp.ParameterValueStruct{}
 
 	// Start by looking for the arrayType attribute to confirm this is an array of ParameterValueStruct
@@ -629,4 +825,29 @@ func ParseSetParameterAttributesResponse(elem SOAPElement, cpeHeader cwmp.CwmpHe
 	}
 
 	return &setParameterAttributesResponse, nil
+}
+
+func ParseSetParameterValuesResponse(elem SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
+	setParameterValuesResponse := cwmp.SetParameterValuesResponse{
+		CwmpMessage: cwmp.CwmpMessage{
+			Name: "SetParameterValuesResponse", CwmpHeader: cpeHeader,
+		},
+	}
+
+	for _, child := range elem.Children {
+		switch child.Name.Local {
+		case "Status":
+			status, err := strconv.Atoi(child.Text)
+			if err != nil {
+				return nil, &errors.IncomingMessageError{
+					Source:      cwmp.FaultSourceCPE,
+					FaultCode:   8003, // Invalid arguments
+					FaultString: "SetParameterValuesResponse contains invalid Status value",
+				}
+			}
+			setParameterValuesResponse.Status = status
+		}
+	}
+
+	return &setParameterValuesResponse, nil
 }
