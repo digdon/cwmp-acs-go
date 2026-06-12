@@ -93,7 +93,7 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("[%s] got an empty post when we shouldn't - terminating session\n", sessionID)
 			sessionInfo.SessionState = session.TERMINATED
 			delete(session.SessionIdActiveSessions, sessionID)
-			delete(session.DeviceInfoActiveSessions, sessionInfo.DeviceID)
+			delete(session.DeviceIdStringActiveSessions, sessionInfo.DeviceIdString)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -101,8 +101,10 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 		// This means the CPE is done sending it's RPCs, so now the ACS can send some
 		sessionInfo.SessionState = session.SENDING_ACS_RPCS
 		sessionInfo.LastIncomingMessageTime = time.Now().Unix()
+		sessionInfo.Context = r.Context()
 
 		outgoingMsg = findOutgoingRpc(sessionInfo)
+		sessionInfo.ActiveRPC = outgoingMsg
 	} else {
 		outgoingMsg, sessionInfo, err = handleIncomingMessage(xmlBytes, sessionID, r.Context())
 		if err != nil {
@@ -149,7 +151,7 @@ func CwmpHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("[%s] no outgoing messages - terminating session\n", sessionID)
 		sessionInfo.SessionState = session.TERMINATED
 		delete(session.SessionIdActiveSessions, sessionID)
-		delete(session.DeviceInfoActiveSessions, sessionInfo.DeviceID)
+		delete(session.DeviceIdStringActiveSessions, sessionInfo.DeviceIdString)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -232,9 +234,10 @@ func handleIncomingMessage(xmlBytes []byte, sessionID string, ctx context.Contex
 
 		// Successful parse, so let's register the session
 		sessionInfo.DeviceID = parsedMsg.(*cwmp.Inform).DeviceId
+		sessionInfo.DeviceIdString = generateDeviceIdString(sessionInfo.DeviceID)
 		sessionInfo.SessionState = session.INITIATING
 		session.SessionIdActiveSessions[sessionID] = sessionInfo
-		session.DeviceInfoActiveSessions[sessionInfo.DeviceID] = sessionInfo
+		session.DeviceIdStringActiveSessions[sessionInfo.DeviceIdString] = sessionInfo
 	} else {
 		// Everything else
 		if sessionID == "" || sessionInfo == nil {
@@ -287,6 +290,7 @@ func handleIncomingMessage(xmlBytes []byte, sessionID string, ctx context.Contex
 
 		// Look for the next ACS RPC to send back to the CPE (if any)
 		outgoingMsg = findOutgoingRpc(sessionInfo)
+		sessionInfo.ActiveRPC = outgoingMsg
 	}
 
 	return outgoingMsg, sessionInfo, nil
@@ -396,13 +400,46 @@ func processIncomingResponse(sessionInfo *session.SessionInfo, incomingMsg cwmp.
 	// For now, we don't have any ACS requests that expect responses, so we'll just log the incoming response
 
 	fmt.Printf("Processing incoming response: %+v\n", incomingMsg)
+
+	// Compare the incoming response to the active RPC in the session info, and if they match then we can clear the active RPC (since we've got the response now)
+	if sessionInfo.ActiveRPC != nil && incomingMsg.GetID() == sessionInfo.ActiveRPC.GetID() {
+		fmt.Printf("Received response for active RPC - clearing active RPC\n")
+		db.DeleteQueuedRPC(sessionInfo.Context, sessionInfo.ActiveRPC.GetID())
+		sessionInfo.ActiveRPC = nil
+	} else {
+		fmt.Printf("Received response, but it doesn't match the active RPC (or there is no active RPC) - not clearing active RPC\n")
+	}
 }
 
 func findOutgoingRpc(sessionInfo *session.SessionInfo) cwmp.CwmpMessageInterface {
-	// This is where we would look for the next ACS RPC to send back to the CPE (if any)
-	// For now, we don't have any ACS RPCs to send, so we'll just return nil
+	var msg cwmp.CwmpMessageInterface
 
-	return nil
+	for {
+		pm, err := db.FetchQueuedRPC(sessionInfo.Context, sessionInfo.DeviceIdString)
+		if err != nil {
+			fmt.Printf("[%s] error dequeuing pending message: %v\n", sessionInfo.SessionID, err)
+			return nil
+		}
+		if pm == nil {
+			return nil
+		}
+
+		if pm.SendCount > 5 {
+			fmt.Printf("[%s] pending message %s has been attempted to be sent %d times - skipping\n", sessionInfo.SessionID, pm.MessageName, pm.SendCount)
+			db.DeleteQueuedRPC(sessionInfo.Context, pm.MessageID)
+			continue
+		}
+
+		msg, err = buildCwmpMessageFromParts(pm.MessageID, pm.MessageName, pm.Parameters)
+		if err != nil {
+			fmt.Printf("[%s] error rebuilding pending message %s: %v\n", sessionInfo.SessionID, pm.MessageName, err)
+			return nil
+		}
+
+		break
+	}
+
+	return msg
 }
 
 func parseCwmpMessageViaMap(cwmpVersion cwmp.SupportedCwmpVersion, rpcName string, elem xml.SOAPElement, cpeHeader cwmp.CwmpHeader) (cwmp.CwmpMessageInterface, error) {
@@ -470,16 +507,6 @@ func sendOutgoingMsg(w http.ResponseWriter, sessionInfo *session.SessionInfo, me
 
 func processInformRequest(sessionInfo *session.SessionInfo, informMsg *cwmp.Inform) cwmp.CwmpMessageInterface {
 
-	// Generate the device ID string, which is comprised of the OUI, ProductClass and SerialNumber (if ProductClass is present), or just OUI and SerialNumber (if ProductClass is not present)
-	var deviceIdString string
-	if informMsg.DeviceId.ProductClass != "" {
-		deviceIdString = fmt.Sprintf("%s-%s-%s", informMsg.DeviceId.OUI, informMsg.DeviceId.ProductClass, informMsg.DeviceId.SerialNumber)
-	} else {
-		deviceIdString = fmt.Sprintf("%s-%s", informMsg.DeviceId.OUI, informMsg.DeviceId.SerialNumber)
-	}
-
-	sessionInfo.DeviceIdString = deviceIdString
-
 	// Look for special events
 	bootEvent := false
 	for _, event := range informMsg.Events {
@@ -508,7 +535,7 @@ func processInformRequest(sessionInfo *session.SessionInfo, informMsg *cwmp.Info
 	}
 
 	deviceInfo := db.DeviceInfo{
-		DeviceID:             deviceIdString,
+		DeviceID:             sessionInfo.DeviceIdString,
 		Manufacturer:         informMsg.DeviceId.Manufacturer,
 		OUI:                  informMsg.DeviceId.OUI,
 		ProductClass:         informMsg.DeviceId.ProductClass,
@@ -571,5 +598,13 @@ func generateFault(id string, faultSource cwmp.FaultSource, faultCode int, fault
 		Source:      faultSource,
 		FaultCode:   faultCode,
 		FaultString: faultString,
+	}
+}
+
+func generateDeviceIdString(deviceId cwmp.DeviceId) string {
+	if deviceId.ProductClass != "" {
+		return fmt.Sprintf("%s-%s-%s", deviceId.OUI, deviceId.ProductClass, deviceId.SerialNumber)
+	} else {
+		return fmt.Sprintf("%s-%s", deviceId.OUI, deviceId.SerialNumber)
 	}
 }

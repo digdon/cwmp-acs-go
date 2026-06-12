@@ -40,20 +40,12 @@ func InitDB(ctx context.Context) {
 	db.SetMaxIdleConns(2)
 
 	// Set up required tables
-	createDeviceTableSQL := `CREATE TABLE IF NOT EXISTS device (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		device_id TEXT NOT NULL UNIQUE,
-		manufacturer TEXT NOT NULL,
-		oui TEXT NOT NULL,
-		product_class TEXT NOT NULL,
-		serial_number TEXT NOT NULL,
-		connection_request_url TEXT NOT NULL,
-		parameter_key TEXT,
-		provisioning_code TEXT
-	);`
-
 	if _, err := db.ExecContext(ctx, createDeviceTableSQL); err != nil {
-		log.Fatalf("Create table failed: %v", err)
+		log.Fatalf("Create device table failed: %v", err)
+	}
+
+	if _, err := db.ExecContext(ctx, createRPCQueueTableSQL); err != nil {
+		log.Fatalf("Create rpc_queue table failed: %v", err)
 	}
 }
 
@@ -81,7 +73,8 @@ func AddDevice(ctx context.Context, info DeviceInfo) error {
 			serial_number = excluded.serial_number,
 			connection_request_url = excluded.connection_request_url,
 			parameter_key = excluded.parameter_key,
-			provisioning_code = excluded.provisioning_code;`
+			provisioning_code = excluded.provisioning_code,
+			updated_at = CURRENT_TIMESTAMP;`
 	result, err := db.ExecContext(ctx, upsertSQL, info.DeviceID, info.Manufacturer, info.OUI, info.ProductClass, info.SerialNumber, info.ConnectionRequestURL, nullableString(info.ParameterKey), nullableString(info.ProvisioningCode))
 	if err != nil {
 		log.Printf("Error registering device %s: %v", info.DeviceID, err)
@@ -98,7 +91,7 @@ func AddDevice(ctx context.Context, info DeviceInfo) error {
 
 func UpdateDevice(ctx context.Context, info DeviceInfo) error {
 	log.Printf("Updating device: %s", info.DeviceID)
-	updateSQL := `UPDATE device SET manufacturer = ?, oui = ?, product_class = ?, serial_number = ?, connection_request_url = ?, parameter_key = ?, provisioning_code = ? WHERE device_id = ?;`
+	updateSQL := `UPDATE device SET manufacturer = ?, oui = ?, product_class = ?, serial_number = ?, connection_request_url = ?, parameter_key = ?, provisioning_code = ?, updated_at = CURRENT_TIMESTAMP WHERE device_id = ?;`
 	result, err := db.ExecContext(ctx, updateSQL, info.Manufacturer, info.OUI, info.ProductClass, info.SerialNumber, info.ConnectionRequestURL, nullableString(info.ParameterKey), nullableString(info.ProvisioningCode), info.DeviceID)
 	if err != nil {
 		log.Printf("Error updating device %s: %v", info.DeviceID, err)
@@ -113,7 +106,7 @@ func UpdateDevice(ctx context.Context, info DeviceInfo) error {
 	return nil
 }
 
-func GetDevice(ctx context.Context, deviceID string) (info *DeviceInfo, err error) {
+func GetDeviceByID(ctx context.Context, deviceID string) (info *DeviceInfo, err error) {
 	log.Printf("Retrieving device: %s", deviceID)
 	querySQL := `SELECT manufacturer, oui, product_class, serial_number, connection_request_url, parameter_key, provisioning_code FROM device WHERE device_id = ?;`
 	row := db.QueryRowContext(ctx, querySQL, deviceID)
@@ -152,4 +145,59 @@ func IsDeviceRegistered(ctx context.Context, deviceID string) (bool, error) {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+func QueueRPC(ctx context.Context, deviceID, messageID, messageName string, parameters []byte) error {
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO rpc_queue (message_id, device_id, message_name, parameters) VALUES (?, ?, ?, ?);`,
+		messageID, deviceID, messageName, nullableString(string(parameters)),
+	)
+	if err != nil {
+		log.Printf("Error enqueueing message %s for device %s: %v", messageName, deviceID, err)
+	}
+	return err
+}
+
+func FetchQueuedRPC(ctx context.Context, deviceID string) (*PendingMessage, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var rowID int64
+	var messageID, messageName string
+	var parameters sql.NullString
+	var sendCount int
+
+	row := tx.QueryRowContext(ctx,
+		`SELECT id, message_id, message_name, parameters, send_count FROM rpc_queue WHERE device_id = ? ORDER BY id ASC LIMIT 1;`,
+		deviceID,
+	)
+	if err := row.Scan(&rowID, &messageID, &messageName, &parameters, &sendCount); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE rpc_queue SET send_count = send_count + 1 WHERE id = ?;`, rowID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return &PendingMessage{
+		MessageID:   messageID,
+		MessageName: messageName,
+		Parameters:  []byte(parameters.String),
+		SendCount:   sendCount,
+	}, nil
+}
+
+func DeleteQueuedRPC(ctx context.Context, messageID string) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM rpc_queue WHERE message_id = ?;`, messageID)
+	return err
 }

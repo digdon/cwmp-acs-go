@@ -66,6 +66,7 @@ type Route struct {
 var routingTable = []Route{
 	{Path: controllers.CwmpControllerPath, Method: http.MethodPost, Handler: controllers.CwmpHandler},
 	{Path: controllers.StatusControllerPath, Method: http.MethodGet, Handler: controllers.StatusHandler},
+	{Path: controllers.ApiControllerPath, Method: http.MethodPost, Handler: controllers.ApiHandler},
 }
 
 func router(w http.ResponseWriter, r *http.Request) {
