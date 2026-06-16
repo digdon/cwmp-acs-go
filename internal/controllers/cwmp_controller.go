@@ -12,6 +12,7 @@ import (
 	"cwmp-acs/db"
 	"cwmp-acs/internal/cwmp"
 	"cwmp-acs/internal/errors"
+	"cwmp-acs/internal/events"
 	"cwmp-acs/internal/session"
 	"cwmp-acs/internal/xml"
 	cwmp14 "cwmp-acs/internal/xml/cwmp_1_4"
@@ -406,6 +407,15 @@ func processIncomingResponse(sessionInfo *session.SessionInfo, incomingMsg cwmp.
 		fmt.Printf("Received response for active RPC - clearing active RPC\n")
 		db.DeleteQueuedRPC(sessionInfo.Context, sessionInfo.ActiveRPC.GetID())
 		sessionInfo.ActiveRPC = nil
+
+		events.GlobalBroker.Publish(events.Event{
+			Type:      events.EventType(incomingMsg.GetName()),
+			DeviceID:  sessionInfo.DeviceIdString,
+			SessionID: sessionInfo.SessionID,
+			MessageID: incomingMsg.GetID(),
+			Timestamp: time.Now(),
+			Payload:   incomingMsg,
+		})
 	} else {
 		fmt.Printf("Received response, but it doesn't match the active RPC (or there is no active RPC) - not clearing active RPC\n")
 	}
@@ -583,6 +593,15 @@ func processInformRequest(sessionInfo *session.SessionInfo, informMsg *cwmp.Info
 		},
 		MaxEnvelopes: 1,
 	}
+
+	events.GlobalBroker.Publish(events.Event{
+		Type:      events.EventInform,
+		DeviceID:  sessionInfo.DeviceIdString,
+		SessionID: sessionInfo.SessionID,
+		MessageID: informMsg.GetID(),
+		Timestamp: time.Now(),
+		Payload:   informMsg,
+	})
 
 	return informResponse
 }
