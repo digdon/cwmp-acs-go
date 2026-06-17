@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -93,6 +92,17 @@ func ApiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if device exists before building message to avoid unnecessary work
+	deviceInfo, err := db.GetDeviceByID(r.Context(), req.DeviceID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to fetch device info: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if deviceInfo == nil {
+		http.Error(w, "device not found", http.StatusNotFound)
+		return
+	}
+
 	msg, err := buildCwmpMessage(req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to build message: %v", err), http.StatusBadRequest)
@@ -109,7 +119,7 @@ func ApiHandler(w http.ResponseWriter, r *http.Request) {
 		if !ok || sessionInfo == nil || sessionInfo.SessionState == session.TERMINATED {
 			fmt.Printf("No active session for %s, so triggering a connection request\n", req.DeviceID)
 
-			if err := sendConnectionRequest(r.Context(), req.DeviceID); err != nil {
+			if err := sendConnectionRequest(deviceInfo); err != nil {
 				http.Error(w, fmt.Sprintf("failed to trigger connection request: %v", err), http.StatusInternalServerError)
 				return
 			}
@@ -265,15 +275,10 @@ func buildCwmpMessageFromParts(id, name string, params json.RawMessage) (cwmp.Cw
 	}
 }
 
-func sendConnectionRequest(ctx context.Context, deviceID string) error {
-	deviceInfo, err := db.GetDeviceByID(ctx, deviceID)
-	if err != nil {
-		return fmt.Errorf("failed to fetch device info: %w", err)
-	}
+func sendConnectionRequest(deviceInfo *db.DeviceInfo) error {
 	if deviceInfo == nil {
 		return fmt.Errorf("device not found")
 	}
-
 	if deviceInfo.ConnectionRequestURL == "" {
 		return fmt.Errorf("device does not have a connection request URL")
 	}
