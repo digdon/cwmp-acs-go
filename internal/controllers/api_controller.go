@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -233,9 +234,9 @@ func buildCwmpMessageFromParts(id, name string, params json.RawMessage) (cwmp.Cw
 		if len(p.Attributes) == 0 {
 			return nil, fmt.Errorf("SetParameterAttributes requires at least one attribute entry")
 		}
-		attrs := make([]cwmp.SetParameterAttributeStruct, len(p.Attributes))
+		attrs := make([]cwmp.SetParameterAttributesStruct, len(p.Attributes))
 		for i, a := range p.Attributes {
-			attrs[i] = cwmp.SetParameterAttributeStruct{
+			attrs[i] = cwmp.SetParameterAttributesStruct{
 				Name:               a.Name,
 				NotificationChange: a.NotificationChange,
 				Notification:       a.Notification,
@@ -258,10 +259,15 @@ func buildCwmpMessageFromParts(id, name string, params json.RawMessage) (cwmp.Cw
 		}
 		paramList := make([]cwmp.ParameterValueStruct, len(p.ParameterList))
 		for i, param := range p.ParameterList {
+			typeValue := param.Type
+			if pos := strings.Index(typeValue, ":"); pos != -1 {
+				typeValue = typeValue[pos+1:]
+			}
+
 			paramList[i] = cwmp.ParameterValueStruct{
 				Name:  param.Name,
 				Value: param.Value,
-				Type:  param.Type,
+				Type:  typeValue,
 			}
 		}
 		return &cwmp.SetParameterValues{

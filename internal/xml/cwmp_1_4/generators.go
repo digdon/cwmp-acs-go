@@ -413,9 +413,9 @@ func GenerateSetParameterAttributes(message cwmp.CwmpMessageInterface, namespace
 	body := envelope.AddChild(dom.NewElement(soapenv.Prefix + ":Body"))
 	spa := body.AddChild(dom.NewElement(cwmpNS.Prefix + ":SetParameterAttributes"))
 	paramList := spa.AddChild(dom.NewElement("ParameterList"))
-	paramList.AddAttr(soapenc.Prefix+":arrayType", fmt.Sprintf("%s:SetParameterAttributeStruct[%d]", cwmpNS.Prefix, len(setParameterAttributes.ParameterList)))
+	paramList.AddAttr(soapenc.Prefix+":arrayType", fmt.Sprintf("%s:SetParameterAttributesStruct[%d]", cwmpNS.Prefix, len(setParameterAttributes.ParameterList)))
 	for _, param := range setParameterAttributes.ParameterList {
-		paramEl := paramList.AddChild(dom.NewElement("SetParameterAttributeStruct"))
+		paramEl := paramList.AddChild(dom.NewElement("SetParameterAttributesStruct"))
 		paramEl.AddChild(dom.NewElement("Name").SetText(param.Name))
 		paramEl.AddChild(dom.NewElement("NotificationChange").SetText(strconv.FormatBool(param.NotificationChange)))
 		paramEl.AddChild(dom.NewElement("Notification").SetText(strconv.Itoa(param.Notification)))

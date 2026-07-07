@@ -76,7 +76,7 @@ type ParameterValueStruct struct {
 	Type  string
 }
 
-type SetParameterAttributeStruct struct {
+type SetParameterAttributesStruct struct {
 	Name               string
 	NotificationChange bool
 	Notification       int
@@ -182,7 +182,7 @@ type RebootResponse struct {
 
 type SetParameterAttributes struct {
 	CwmpMessage
-	ParameterList []SetParameterAttributeStruct
+	ParameterList []SetParameterAttributesStruct
 }
 
 type SetParameterAttributesResponse struct {
